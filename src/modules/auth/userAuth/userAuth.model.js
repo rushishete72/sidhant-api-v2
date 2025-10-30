@@ -1,10 +1,9 @@
 /*
  * Context Note: यह मॉडल डेटाबेस (PostgreSQL) से सीधे संपर्क करता है।
- * (UPGRADED: अब असली database/db.js और utils/errorHandler.js का उपयोग कर रहा है)
+ * (FIXED: सभी टेबल नाम और अनुपस्थित (missing) कॉलम 'is_verified' को हटा दिया गया है।)
  */
 
 // निर्भरताएँ - असली (real) फ़ाइलों को इम्पोर्ट करें
-// (पथ फिक्स: 4 लेवल ऊपर)
 const { db, pgp } = require('../../../../src/database/db'); 
 const { APIError } = require('../../../utils/errorHandler');
 const bcrypt = require('bcryptjs'); 
@@ -12,49 +11,51 @@ const bcrypt = require('bcryptjs');
 const OTP_SALT_ROUNDS = 10; 
 
 // =========================================================================
-// (नकली (Mock) DB और Error को यहाँ से हटा दिया गया है)
+// ✅ फिक्स: सही टेबल नाम कॉन्सटेंट्स
 // =========================================================================
+const USER_TABLE = 'master_users'; 
+const ROLE_TABLE = 'master_roles'; 
+const OTP_TABLE = 'user_otp'; // NOTE: यह टेबल आपकी स्कीमा में मौजूद होनी चाहिए।
+
 
 // =========================================================================
-// B. USER & OTP MANAGEMENT (पुराने मॉडल से तर्क)
+// B. USER & OTP MANAGEMENT
 // =========================================================================
 
 /** 1. डिफ़ॉल्ट 'Client' रोल सुनिश्चित करता है (पुराने कोड से फिक्स) */
 const ensureDefaultRoleExists = async (roleName) => {
     try {
         const query = `
-            INSERT INTO roles (role_name) VALUES ($1)
+            INSERT INTO ${ROLE_TABLE} (role_name) VALUES ($1)
             ON CONFLICT (role_name) DO NOTHING;
         `;
         await db.none(query, [roleName]);
-        // console.log(`[DB Setup] Ensured default role '${roleName}' exists.`);
     } catch (error) {
         console.error("CRITICAL SQL ERROR during ensureDefaultRoleExists:", error.message || error); 
-        // यदि DB कनेक्ट नहीं है तो यह विफल हो सकता है
         throw new APIError(`Database setup failed for role '${roleName}'. DB connection error?`, 500);
     }
 }
 
-/** 2. उपयोगकर्ता को ईमेल द्वारा ढूंढता है। */
+/** 2. उपयोगकर्ता को ईमेल द्वारा ढूंढता है। (लॉगिन/प्रोफ़ाइल लुकअप के लिए उपयोग किया जाता है) */
 const getUserByEmail = async (email) => {
     const query = `
-        SELECT u.user_id, u.email, u.full_name, r.role_name AS role, u.is_active, u.is_verified
-        FROM users u
-        JOIN roles r ON u.role_id = r.role_id
+        SELECT u.user_id, u.email, u.full_name, r.role_name AS role, u.is_active, u.password_hash 
+        FROM ${USER_TABLE} u
+        JOIN ${ROLE_TABLE} r ON u.role_id = r.role_id
         WHERE u.email = $1 AND u.is_active = TRUE
     `;
     return db.oneOrNone(query, [email]);
 };
 
-/** 3. एक नया उपयोगकर्ता रजिस्टर करता है। */
+/** 3. एक नया उपयोगकर्ता रजिस्टर करता है। (is_verified हटा दिया गया है) */
 const registerUser = async (email, fullName, defaultRoleName = 'Client') => {
     try {
         await ensureDefaultRoleExists(defaultRoleName);
 
         const query = `
-            WITH RoleID AS (SELECT role_id FROM roles WHERE role_name = $3)
-            INSERT INTO users (email, full_name, role_id, is_active, is_verified)
-            SELECT $1, $2, RoleID.role_id, TRUE, FALSE
+            WITH RoleID AS (SELECT role_id FROM ${ROLE_TABLE} WHERE role_name = $3)
+            INSERT INTO ${USER_TABLE} (email, full_name, role_id, is_active)
+            SELECT $1, $2, RoleID.role_id, TRUE
             FROM RoleID
             RETURNING user_id, email, full_name, role_id
         `;
@@ -62,7 +63,6 @@ const registerUser = async (email, fullName, defaultRoleName = 'Client') => {
         return getUserByEmail(newUser.email);
         
     } catch (e) {
-        // असली (Real) DB एरर हैंडलिंग
         if (e.code === '23505') { 
             throw new APIError("Registration failed: यह ईमेल पहले से मौजूद है।", 409);
         }
@@ -77,7 +77,7 @@ const createOtp = async (userId, otpCode) => {
     const hashedOtp = await bcrypt.hash(otpCode, OTP_SALT_ROUNDS);
 
     const query = `
-        INSERT INTO user_otp (user_id, otp_code, expires_at, attempts)
+        INSERT INTO ${OTP_TABLE} (user_id, otp_code, expires_at, attempts)
         VALUES ($1, $2, $3, 0) 
         ON CONFLICT (user_id) DO UPDATE
         SET otp_code = EXCLUDED.otp_code, expires_at = EXCLUDED.expires_at, attempts = 0
@@ -86,58 +86,52 @@ const createOtp = async (userId, otpCode) => {
     return db.one(query, [userId, hashedOtp, expirationTime]);
 };
 
-/** 5. OTP को मान्य (Validate) करता है। (असली लॉजिक के साथ) */
+/** 5. OTP को मान्य (Validate) करता है। (is_verified अपडेट हटा दिया गया है) */
 const validateOtp = async (userId, inputOtpCode) => { 
     const MAX_OTP_ATTEMPTS = 5; 
 
     return db.tx(async t => { // ट्रांजैक्शन (Transaction)
-        const otpRecord = await t.oneOrNone('SELECT attempts, expires_at, otp_code AS stored_otp_hash FROM user_otp WHERE user_id = $1', [userId]);
+        const otpRecord = await t.oneOrNone(`SELECT attempts, expires_at, otp_code AS stored_otp_hash FROM ${OTP_TABLE} WHERE user_id = $1`, [userId]);
 
         if (!otpRecord) {
-             // OTP नहीं मिला (या पहले ही उपयोग हो चुका है)
-            return null;
+             return null;
         }
         
         if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
-            await t.none('DELETE FROM user_otp WHERE user_id = $1', [userId]); // पुराने OTP को हटा दें
-            throw new APIError('OTP प्रयास सीमा पार हो गई। नया OTP जेनरेट करें।', 401);
+            await t.none(`DELETE FROM ${OTP_TABLE} WHERE user_id = $1`, [userId]); 
+            throw new APIError('OTP प्रयास सीमा सीमा पार हो गई। नया OTP जेनरेट करें।', 401);
         }
 
         if (otpRecord.expires_at < new Date()) {
-            await t.none('UPDATE user_otp SET attempts = attempts + 1 WHERE user_id = $1', [userId]);
+            await t.none(`UPDATE ${OTP_TABLE} SET attempts = attempts + 1 WHERE user_id = $1`, [userId]);
             throw new APIError('OTP समाप्त हो गया है। कृपया नया अनुरोध करें।', 401);
         }
         
-        // ✅ असली (Real) bcrypt जाँच
         const isMatch = await bcrypt.compare(inputOtpCode, otpRecord.stored_otp_hash);
 
         if (!isMatch) {
-            await t.none('UPDATE user_otp SET attempts = attempts + 1 WHERE user_id = $1', [userId]);
+            await t.none(`UPDATE ${OTP_TABLE} SET attempts = attempts + 1 WHERE user_id = $1`, [userId]);
             return null; // अमान्य OTP
         }
         
-        // OTP सही है, उपयोगकर्ता को सत्यापित करें और OTP हटा दें
-        await t.none('UPDATE users SET is_verified = TRUE WHERE user_id = $1', [userId]);
-        await t.none('DELETE FROM user_otp WHERE user_id = $1', [userId]);
+        // ✅ फिक्स: is_verified UPDATE हटा दिया गया है।
+        await t.none(`DELETE FROM ${OTP_TABLE} WHERE user_id = $1`, [userId]);
 
-        return t.oneOrNone('SELECT user_id FROM users WHERE user_id = $1', [userId]);
+        return t.oneOrNone(`SELECT user_id FROM ${USER_TABLE} WHERE user_id = $1`, [userId]);
     });
 };
 
-/** 6. JWT Payload के लिए प्रोफ़ाइल डेटा प्राप्त करें। (असली लॉजिक के साथ) */
+/** 6. JWT Payload के लिए प्रोफ़ाइल डेटा प्राप्त करें। (is_verified हटा दिया गया है) */
 const getUserProfileData = async (userId) => {
     const query = `
         SELECT 
-            u.user_id, u.email, u.full_name, r.role_name AS role, u.is_verified, 
-            COALESCE(ARRAY_AGG(p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), '{}') AS permissions
-        FROM users u
-        JOIN roles r ON u.role_id = r.role_id
-        LEFT JOIN role_permissions rp ON r.role_id = rp.role_id
-        LEFT JOIN permissions p ON rp.permission_id = p.permission_id
+            u.user_id, u.email, u.full_name, r.role_name AS role, 
+            u.role_id,
+            COALESCE(r.permissions, '{}') AS permissions
+        FROM ${USER_TABLE} u
+        JOIN ${ROLE_TABLE} r ON u.role_id = r.role_id
         WHERE u.user_id = $1 AND u.is_active = TRUE
-        GROUP BY u.user_id, u.email, u.full_name, r.role_name, u.is_verified
     `;
-    // (नकली .then() ब्लॉक हटा दिया गया है)
     return db.oneOrNone(query, [userId]);
 };
 
@@ -147,7 +141,7 @@ const updateUserPassword = async (userId, newPassword) => {
     const passwordHash = await bcrypt.hash(newPassword, salt);
 
     const query = `
-        UPDATE users SET password_hash = $2, updated_at = NOW() 
+        UPDATE ${USER_TABLE} SET password_hash = $2, updated_at = NOW() 
         WHERE user_id = $1
         RETURNING user_id
     `;
@@ -160,9 +154,8 @@ const updateUserPassword = async (userId, newPassword) => {
 
 /** 8. OTP रो को डिलीट करें। */
 const deleteOtp = async (userId) => {
-    return db.none('DELETE FROM user_otp WHERE user_id = $1', [userId]);
+    return db.none(`DELETE FROM ${OTP_TABLE} WHERE user_id = $1`, [userId]);
 };
-
 
 // =========================================================================
 // FINAL EXPORTS 
