@@ -3,21 +3,30 @@
  */
 
 const { APIError } = require("../../../utils/errorHandler");
-const { registerUser: registerUserService } = require("./userAuth.service");
-
-// --- FIX 1: Add emailSender import at the top ---
 const emailSender = require("../../../utils/emailSender");
-// ------------------------------------------------
-
 const userAuthModel = require("./userAuth.model"); // retained for other controller actions
 const {
   generateOtp,
   handleEmailValidation,
 } = require("../../../utils/validation");
 const jwt = require("jsonwebtoken");
+const service = require("./userAuth.service");
+const validators = require("./userAuth.validation");
 
-const JWT_SECRET = process.env.JWT_SECRET || "your_default_secret_key";
-const JWT_EXPIRY = process.env.JWT_EXPIRY || "7d";
+const JWT_SECRET = process.env.JWT_SECRET || "replace-me";
+const JWT_COOKIE_NAME = process.env.JWT_COOKIE_NAME || "token";
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax",
+};
+
+function mapJoiError(err) {
+  const error = new Error("Validation error");
+  error.status = 400;
+  error.details = err && err.details ? err.details.map((d) => d.message) : [err.message];
+  return error;
+}
 
 const createAuthToken = (profile) => {
   const payload = {
@@ -35,7 +44,7 @@ const createAuthToken = (profile) => {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRY });
 };
 
-const registerUser = async (req, res, next) => {
+async function registerUser(req, res, next) {
   try {
     const payload = {
       email: req.body.email,
@@ -44,19 +53,23 @@ const registerUser = async (req, res, next) => {
       defaultRoleName: req.body.defaultRoleName,
     };
 
-    const user = await registerUserService(payload);
-
-    return res.status(201).json({
-      message:
-        "User registered successfully. Verification email sent if configured.",
-      data: user,
+    const validated = await validators.register.validateAsync(req.body, {
+      stripUnknown: true,
+    });
+    const result = await service.registerUser(validated);
+    res.status(201).json({
+      message: "User registered successfully. Verification email sent if configured.",
+      data: result.user,
+      // OTP returned for dev/testing only; remove in production
+      otp: result.otp,
     });
   } catch (err) {
-    return next(err);
+    if (err.isJoi) return next(mapJoiError(err));
+    next(err);
   }
-};
+}
 
-const loginUser = async (req, res, next) => {
+async function loginUser(req, res, next) {
   const { email } = req.body;
 
   const emailError = handleEmailValidation(email);
@@ -105,106 +118,61 @@ const loginUser = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-};
+}
 
-const verifyOtp = async (req, res, next) => {
-  const { email, otp: inputOtpCode = "123456" } = req.body;
-
-  if (!email || !inputOtpCode) {
-    return next(
-      new APIError("Email and OTP are required for verification.", 400)
-    );
-  }
-
+async function verifyOtp(req, res, next) {
   try {
-    const user = await userAuthModel.getUserByEmail(email);
-
-    if (!user) {
-      return next(new APIError("User not found or is inactive.", 404));
-    }
-
-    const verificationResult = await userAuthModel.validateOtp(
-      user.user_id,
-      inputOtpCode
-    );
-
-    if (!verificationResult) {
-      return next(
-        new APIError("Invalid OTP or OTP expired/attempts exceeded.", 401)
-      );
-    }
-
-    const profile = await userAuthModel.getUserProfileData(user.user_id);
-
-    if (!profile) {
-      return next(
-        new APIError("Failed to load user profile after verification.", 500)
-      );
-    }
-
-    const token = createAuthToken(profile);
-
-    res.status(200).json({
-      message: "OTP verified. Login successful.",
-      token: token,
-      data: {
-        user_id: profile.user_id,
-        email: profile.email,
-        role: profile.role,
-        permissions: profile.permissions,
-      },
+    const validated = await validators.verifyOtp.validateAsync(req.body, {
+      stripUnknown: true,
     });
-  } catch (error) {
-    next(error);
+    const updated = await service.verifyOtp(validated);
+    res.status(200).json({ message: "OTP verified. Account activated.", user: updated });
+  } catch (err) {
+    if (err.isJoi) return next(mapJoiError(err));
+    next(err);
   }
-};
+}
 
-const resetPassword = async (req, res, next) => {
-  const { email, newPassword, otp: inputOtpCode = "123456" } = req.body;
-
-  if (!email || !newPassword || !inputOtpCode) {
-    return next(
-      new APIError("Email, OTP, and new password are required.", 400)
-    );
-  }
-
+async function resetPassword(req, res, next) {
   try {
-    const user = await userAuthModel.getUserByEmail(email);
-
-    if (!user) {
-      return next(new APIError("User not found or is inactive.", 404));
-    }
-
-    const verificationResult = await userAuthModel.validateOtp(
-      user.user_id,
-      inputOtpCode
-    );
-
-    if (!verificationResult) {
-      return next(
-        new APIError("Invalid OTP or OTP expired/attempts exceeded.", 401)
-      );
-    }
-
-    await userAuthModel.updateUserPassword(user.user_id, newPassword);
-
-    res.status(200).json({
-      message:
-        "Password successfully reset. You can now login (if password login is enabled).",
-      data: {
-        user_id: user.user_id,
-      },
+    const validated = await validators.resetPassword.validateAsync(req.body, {
+      stripUnknown: true,
     });
-  } catch (error) {
-    next(error);
+    const updated = await service.resetPassword({
+      email: validated.email,
+      otp: validated.otp,
+      newPassword: validated.newPassword,
+    });
+    res.status(200).json({ message: "Password reset successful.", user: updated });
+  } catch (err) {
+    if (err.isJoi) return next(mapJoiError(err));
+    next(err);
   }
-};
+}
 
-const logoutUser = (req, res) => {
-  res.status(200).json({
-    message: "Logout successful. कृपया क्लाइंट-साइड पर टोकन हटाएँ।",
-  });
-};
+async function logoutUser(req, res, next) {
+  try {
+    // token may be in Authorization header or cookie
+    let token = null;
+    const auth = req.headers.authorization;
+    if (auth && auth.startsWith("Bearer ")) token = auth.slice(7);
+    else if (req.cookies && req.cookies[JWT_COOKIE_NAME])
+      token = req.cookies[JWT_COOKIE_NAME];
+
+    if (!token) {
+      const err = new Error("No token provided for logout");
+      err.status = 400;
+      throw err;
+    }
+
+    await service.logoutUser({ token });
+
+    res.clearCookie(JWT_COOKIE_NAME, COOKIE_OPTIONS);
+    res.status(200).json({ message: "Logged out" });
+  } catch (err) {
+    next(err);
+  }
+}
 
 module.exports = {
   registerUser,
