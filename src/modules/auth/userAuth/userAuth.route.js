@@ -1,37 +1,44 @@
-/*
- * Context Note: यह auth मॉड्यूल के लिए API endpoints (routes) को परिभाषित करता है।
- * (UPGRADED: अब असली (real) कंट्रोलर फ़ंक्शंस का उपयोग कर रहा है)
- */
-const express = require('express');
+// File: src/modules/auth/userAuth/userAuth.route.js
+
+const express = require("express");
 const router = express.Router();
 
-// ✅ असली कंट्रोलर फ़ंक्शंस को इम्पोर्ट करें
-const { 
-    registerUser,
-    loginUser, 
-    verifyOtp,
-    logoutUser,
-    resetPassword
-} = require('./userAuth.controller'); 
+const {
+  register,
+  loginStep1,
+  loginStep2,
+  logout,
+  forgotPasswordStep1,
+  forgotPasswordStep2,
+} = require("./userAuth.controller");
 
-// -------------------------------------------------------------------------
-// Routes Definition
-// (पुराने कोडबेस /src/modules/auth/userAuth/userAuth.route.js के आधार पर)
-// -------------------------------------------------------------------------
+const { validate } = require("../../../utils/validation");
+const { authenticate } = require("../../../middleware/auth"); // FIX: using named export 'authenticate'
 
-// POST /api/v2/auth/register
-router.post('/register', registerUser);
+const {
+  registerSchema,
+  loginStep1Schema,
+  loginStep2Schema,
+  forgotPasswordStep1Schema,
+  forgotPasswordStep2Schema,
+} = require("./userAuth.validation");
 
-// POST /api/v2/auth/login
-router.post('/login', loginUser);
+// --- Public Routes ---
+router.post("/register", validate(registerSchema), register);
+router.post("/login/step1", validate(loginStep1Schema), loginStep1);
+router.post("/login/step2", validate(loginStep2Schema), loginStep2);
+router.post(
+  "/forgot-password/step1",
+  validate(forgotPasswordStep1Schema),
+  forgotPasswordStep1
+);
+router.post(
+  "/forgot-password/step2",
+  validate(forgotPasswordStep2Schema),
+  forgotPasswordStep2
+);
 
-// POST /api/v2/auth/verify-otp
-router.post('/verify-otp', verifyOtp);
-
-// POST /api/v2/auth/reset-password
-router.post('/reset-password', resetPassword);
-
-// GET /api/v2/auth/logout 
-router.get('/logout', logoutUser); 
+// --- Protected Routes ---
+router.post("/logout", authenticate, logout); // FIX: using 'authenticate'
 
 module.exports = router;
