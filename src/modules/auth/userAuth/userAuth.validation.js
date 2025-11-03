@@ -1,75 +1,61 @@
-/**
- * src/modules/auth/userAuth/userAuth.validation.js - Final Joi Schemas
- * FIX: Re-enables strict TLD checking for email validation.
- */
+// File: src/modules/auth/userAuth/userAuth.validation.js
 
 const Joi = require("joi");
 
-// --- Reusable Schemas ---
+// Common password regex for security: Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char
+const passwordRegex =
+  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 
-const otpSchema = Joi.string()
-  .pattern(/^\d{6}$/)
-  .required()
-  .messages({
-    "any.required": "OTP is required.",
-    "string.pattern.base": "OTP must be a 6-digit number.",
-  });
-
-const emailSchema = Joi.string()
-  .trim()
-  .email({
-    tlds: {
-      allow: true, // ✅ FIX: Standard TLD rules are now enforced
-    },
-  })
-  .max(100)
-  .required()
-  .messages({
-    "any.required": "Email is required.",
-    "string.email": "Invalid email format.",
-  });
-
-const passwordSchema = Joi.string().min(6).max(128).required().messages({
-  "any.required": "Password is required.",
-  "string.min": "Password must be at least 6 characters.",
-});
-
-// 1. REGISTER SCHEMA
 const registerSchema = Joi.object({
-  full_name: Joi.string().trim().min(2).max(100).required(),
-  email: emailSchema,
-  password: passwordSchema,
-  defaultRoleName: Joi.string().trim().optional(),
+  email: Joi.string().email().required().lowercase().trim().messages({
+    "string.email": "Email must be a valid email address.",
+    "any.required": "Email is required.",
+  }),
+  password: Joi.string().pattern(passwordRegex).required().messages({
+    "string.pattern.base":
+      "Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character.",
+    "any.required": "Password is required.",
+  }),
+  full_name: Joi.string().min(3).max(100).required(),
+  role_id: Joi.number().integer().positive().required(), // Assuming role_id must be provided during registration
 });
 
-// 2. LOGIN SCHEMA
-const loginSchema = Joi.object({
-  email: emailSchema,
-  password: passwordSchema,
+const loginStep1Schema = Joi.object({
+  email: Joi.string().email().required().lowercase().trim(),
+  password: Joi.string().required(),
 });
 
-// 3. VERIFY OTP SCHEMA
-const verifyOtpSchema = Joi.object({
-  email: emailSchema,
-  otp: otpSchema,
+const loginStep2Schema = Joi.object({
+  user_id: Joi.number().integer().positive().required().messages({
+    "any.required": "User ID is required from the first login step.",
+  }),
+  otp: Joi.string()
+    .length(6)
+    .pattern(/^[0-9]+$/)
+    .required()
+    .messages({
+      "string.length": "OTP must be 6 digits.",
+      "string.pattern.base": "OTP must be numerical.",
+    }),
 });
 
-// 4. FORGOT PASSWORD (Initiate reset) SCHEMA
-const forgotPasswordSchema = Joi.object({
-  email: emailSchema,
+const forgotPasswordStep1Schema = Joi.object({
+  email: Joi.string().email().required().lowercase().trim(),
 });
 
-// 5. RESET PASSWORD SCHEMA
-const resetPasswordSchema = Joi.object({
-  email: emailSchema,
-  otp: otpSchema,
-  newPassword: passwordSchema,
+const forgotPasswordStep2Schema = Joi.object({
+  email: Joi.string().email().required().lowercase().trim(),
+  otp: Joi.string()
+    .length(6)
+    .pattern(/^[0-9]+$/)
+    .required(),
+  new_password: Joi.string().pattern(passwordRegex).required(),
 });
 
 module.exports = {
   registerSchema,
-  loginSchema,
-  verifyOtpSchema,
-  forgotPasswordSchema,
-  resetPasswordSchema,
+  loginStep1Schema,
+  loginStep2Schema,
+  forgotPasswordStep1Schema,
+  forgotPasswordStep2Schema,
 };

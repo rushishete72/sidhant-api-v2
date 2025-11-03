@@ -1,165 +1,90 @@
-/**
- * src/utils/emailSender.js - World-Class, Robust SMTP Utility
- * (FINAL VERSION: Correctly maps EMAIL_PASSWORD, uses caching, verification, and clear helpers)
- */
-"use strict";
+// File: src/utils/emailSender.js
 
+// Using 'nodemailer' as the standard library.
+// Mocking the 'nodemailer' transport for simplicity in this code block.
 const nodemailer = require("nodemailer");
-// Assume ErrorHandler is available in the same utils folder
-const ErrorHandler = require("./errorHandler");
+const UserAuthModel = require("../modules/auth/userAuth/userAuth.model");
 
-// =========================================================================
-// ✅ FINAL FIX: Correctly map EMAIL_PASSWORD from process.env to local EMAIL_PASS
-// =========================================================================
-const EMAIL_HOST = process.env.EMAIL_HOST;
-const EMAIL_PORT = process.env.EMAIL_PORT;
-const EMAIL_USER = process.env.EMAIL_USER;
-// 🛑 CRITICAL FIX: Load from EMAIL_PASSWORD to match the .env file
-const EMAIL_PASS = process.env.EMAIL_PASSWORD;
-// =========================================================================
+// --- Configuration (Should ideally be in a separate config/env file) ---
+const EMAIL_TRANSPORT_CONFIG = {
+  host: process.env.EMAIL_HOST || "smtp.example.com",
+  port: process.env.EMAIL_PORT || 587,
+  secure: process.env.EMAIL_SECURE === "true", // Use TLS/SSL
+  auth: {
+    user: process.env.EMAIL_USER || "noreply@example.com",
+    pass: process.env.EMAIL_PASS || "password123",
+  },
+};
 
-// EMAIL_SENDER_NAME का उपयोग करके 'From' एड्रेस को बेहतर बनाएं
-const EMAIL_FROM = process.env.EMAIL_SENDER_NAME
-  ? `${process.env.EMAIL_SENDER_NAME} <${EMAIL_USER}>`
-  : EMAIL_USER;
+const SENDER_EMAIL = process.env.SENDER_EMAIL || "noreply@sidhant.com";
 
-let transporter = null;
-let transporterVerified = false;
+const transporter = nodemailer.createTransport(EMAIL_TRANSPORT_CONFIG);
 
 /**
- * Create and cache a nodemailer transporter if configuration exists.
- * Returns null if configuration is incomplete.
+ * Sends an email with support for dynamic Admin/SuperAdmin recipient lookup
+ * for critical notifications.
+ * @param {object} options
+ * @param {string} options.to - The primary recipient email address.
+ * @param {string} options.subject - The subject line.
+ * @param {string} options.text - The plain text body.
+ * @param {boolean} [options.isCritical=false] - If true, send a copy to all Admin/SuperAdmin emails.
  */
-function getTransporter() {
-  if (transporter !== null) return transporter;
+const sendEmail = async ({ to, subject, text, isCritical = false }) => {
+  let finalRecipients = [to];
+  let ccRecipients = [];
 
-  // Check the critical four variables
-  if (!EMAIL_HOST || !EMAIL_PORT || !EMAIL_USER || !EMAIL_PASS) {
-    console.warn(
-      "⚠️ emailSender: Skipping initialization. Missing SMTP credentials."
-    );
-    return null;
+  if (isCritical) {
+    try {
+      // Fetch all Admin/SuperAdmin emails from the database
+      const adminEmails = await UserAuthModel.findAdminEmails();
+
+      // Filter out the primary recipient if they are also an admin, to avoid duplicate sends
+      ccRecipients = adminEmails.filter((email) => email !== to);
+
+      // If the primary recipient (to) is not a critical user (e.g., system user)
+      // and the email is critical, ensure all admins get it in the main 'to' field
+      // if 'to' was a placeholder like 'admin_list_lookup_is_internal'.
+      // For simplicity, we just add admins to CC/BCC.
+      if (ccRecipients.length > 0) {
+        console.log(
+          `Critical email to ${to}. Also CC'ing admins: ${ccRecipients.join(
+            ", "
+          )}`
+        );
+      } else {
+        console.warn(
+          "Critical email requested but no admin emails found in DB."
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Failed to fetch admin emails for critical notification:",
+        error.message
+      );
+      // Non-fatal error: proceed with sending to the primary recipient only
+    }
   }
-
-  const portNum = parseInt(EMAIL_PORT, 10) || 587;
-  const isSecure = portNum === 465;
-
-  try {
-    transporter = nodemailer.createTransport({
-      host: EMAIL_HOST,
-      port: portNum,
-      secure: isSecure,
-      auth: {
-        user: EMAIL_USER,
-        pass: EMAIL_PASS, // ✅ NOW Correctly loaded from EMAIL_PASSWORD
-      },
-      connectionTimeout: 30_000,
-      greetingTimeout: 30_000,
-      socketTimeout: 30_000,
-      // Production में, self-signed errors से बचने के लिए tls: { rejectUnauthorized: false } को हटा दें
-    });
-  } catch (e) {
-    console.error("emailSender: Transporter initialization failed:", e.message);
-    return null;
-  }
-
-  return transporter;
-}
-
-/**
- * Verify transporter once (best-effort). Logs verification failures but does not throw here.
- */
-async function verifyTransporter(t) {
-  if (!t || transporterVerified) return;
-  try {
-    await t.verify();
-    transporterVerified = true;
-    console.log(
-      "✅ emailSender: Transporter connection verified successfully."
-    );
-  } catch (err) {
-    console.warn(
-      "emailSender: Transporter verification failed — emails may not send:",
-      err && err.message ? err.message : err
-    );
-  }
-}
-
-/**
- * Core function to send an email.
- */
-async function sendEmail({ to, subject, text, html } = {}) {
-  // Basic parameter validation
-  if (!to) {
-    throw new Error('sendEmail: "to" parameter is required');
-  }
-  if (!subject) {
-    throw new Error('sendEmail: "subject" parameter is required');
-  }
-  if (!text && !html) {
-    throw new Error('sendEmail: either "text" or "html" body must be provided');
-  }
-
-  const t = getTransporter();
-  if (!t) {
-    console.warn(
-      "[EMAIL SKIP] Service is disabled due to missing SMTP configuration."
-    );
-    return { skipped: true, reason: "missing_smtp_configuration", to, subject };
-  }
-
-  // Verification is best-effort and runs only once
-  await verifyTransporter(t);
 
   const mailOptions = {
-    from: EMAIL_FROM,
-    to,
-    subject,
-    text,
-    html,
+    from: SENDER_EMAIL,
+    to: finalRecipients.join(","),
+    cc: ccRecipients.join(","), // Admins go here if critical
+    subject: isCritical ? `[CRITICAL] ${subject}` : subject,
+    text: text,
+    // html: `<h1>${subject}</h1><p>${text}</p>` // Add HTML body in production
   };
 
   try {
-    const info = await t.sendMail(mailOptions);
-    console.log(`[EMAIL SUCCESS] Sent to ${to}. ID: ${info.messageId}`);
-    return { skipped: false, info };
-  } catch (err) {
-    // Wrap and rethrow using project's ErrorHandler (using 502 for SMTP/network errors)
-    const message = `Failed to send email to ${
-      Array.isArray(to) ? to.join(",") : to
-    }: ${err && err.message ? err.message : "unknown error"}`;
-    // Assuming ErrorHandler(message, statusCode) constructor pattern
-    throw new ErrorHandler(message, 502);
+    const info = await transporter.sendMail(mailOptions);
+    // In a real system, you would log info.messageId or check response status
+    console.log(`Email sent: ${info.response} to ${mailOptions.to}`);
+    return info;
+  } catch (error) {
+    console.error("Email send failed:", error);
+    // Non-fatal error for the API flow, but critical for monitoring
+    // A robust solution would enqueue a retry mechanism (e.g., using a message queue)
+    throw new Error("Email sending failed due to server error.");
   }
-}
-
-/**
- * sendVerificationEmail({ to, name, otp })
- * Helper function to structure the verification email data and call sendEmail.
- */
-async function sendVerificationEmail({ to, name, otp }) {
-  if (!to || !otp) {
-    throw new Error(
-      'sendVerificationEmail: "to" and "otp" parameters are required.'
-    );
-  }
-
-  const subject = "Verify your Account / OTP for Login";
-  const html = `
-      <h1>Hello ${name || to},</h1>
-      <p>Your One-Time Password (OTP) for account verification is:</p>
-      <h2 style="color:#007bff;">${otp}</h2>
-      <p>This code is valid for 5 minutes.</p>
-      <p>Thank you.</p>
-    `;
-  const text = `Hello ${
-    name || to
-  }, your OTP is ${otp}. This code is valid for 5 minutes.`;
-
-  return sendEmail({ to, subject, text, html });
-}
-
-module.exports = {
-  sendEmail,
-  sendVerificationEmail,
 };
+
+module.exports = { sendEmail };

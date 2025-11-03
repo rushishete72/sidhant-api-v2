@@ -1,39 +1,44 @@
-/**
- * src/modules/auth/userAuth/userAuth.route.js - Final Route Layer
- * MANDATES: Defines all API endpoints for the Auth module.
- */
+// File: src/modules/auth/userAuth/userAuth.route.js
 
 const express = require("express");
 const router = express.Router();
 
-// Import the final, fixed controller functions
 const {
   register,
-  login,
-  verifyOtp,
-  forgotPassword,
-  resetPassword,
+  loginStep1,
+  loginStep2,
   logout,
+  forgotPasswordStep1,
+  forgotPasswordStep2,
 } = require("./userAuth.controller");
 
-// Note: Assuming these routes are mounted under /api/v2/auth (as per server.js)
+const { validate } = require("../../../utils/validation");
+const { authenticate } = require("../../../middleware/auth"); // FIX: using named export 'authenticate'
 
-// POST /api/v2/auth/register
-router.post("/register", register);
+const {
+  registerSchema,
+  loginStep1Schema,
+  loginStep2Schema,
+  forgotPasswordStep1Schema,
+  forgotPasswordStep2Schema,
+} = require("./userAuth.validation");
 
-// POST /api/v2/auth/login
-router.post("/login", login);
+// --- Public Routes ---
+router.post("/register", validate(registerSchema), register);
+router.post("/login/step1", validate(loginStep1Schema), loginStep1);
+router.post("/login/step2", validate(loginStep2Schema), loginStep2);
+router.post(
+  "/forgot-password/step1",
+  validate(forgotPasswordStep1Schema),
+  forgotPasswordStep1
+);
+router.post(
+  "/forgot-password/step2",
+  validate(forgotPasswordStep2Schema),
+  forgotPasswordStep2
+);
 
-// POST /api/v2/auth/verify-otp
-router.post("/verify-otp", verifyOtp);
-
-// POST /api/v2/auth/forgot-password (Initiates OTP send)
-router.post("/forgot-password", forgotPassword);
-
-// POST /api/v2/auth/reset-password
-router.post("/reset-password", resetPassword);
-
-// GET /api/v2/auth/logout
-router.get("/logout", logout);
+// --- Protected Routes ---
+router.post("/logout", authenticate, logout); // FIX: using 'authenticate'
 
 module.exports = router;

@@ -1,7 +1,4 @@
-/*
- * Context Note: यह मुख्य एक्सप्रेस सर्वर फ़ाइल है।
- * (UPGRADED: अब 'Procurement Purchase Orders' मॉड्यूल के routes शामिल हैं)
- */
+// File: server.js
 
 // 1. .env वेरिएबल्स को तुरंत लोड करें
 const path = require("path");
@@ -25,6 +22,7 @@ if (dotenvResult.error) {
 const express = require("express");
 const cors = require("cors");
 
+// FIX: notFound और errorHandler दोनों को named export से import किया गया है।
 const { errorHandler, notFound } = require("./src/utils/errorHandler");
 const userAuthRoutes = require("./src/modules/auth/userAuth/userAuth.route");
 const supplierRoutes = require("./src/modules/master/supplier/supplier.route");
@@ -39,7 +37,6 @@ const qcResultRoutes = require("./src/modules/qualityControl/inspectionResults/q
 const stockRoutes = require("./src/modules/inventory/stock/stock.route");
 const locationRoutes = require("./src/modules/inventory/locations/location.route");
 const inventoryMasterRoutes = require("./src/modules/inventory/masterData/inventoryMaster.route");
-// ✅ नया इम्पोर्ट
 const purchaseOrderRoutes = require("./src/modules/procurement/purchasing/purchaseOrder.route");
 
 const app = express();
@@ -79,7 +76,7 @@ app.use("/api/v2/inventory/stock", stockRoutes);
 app.use("/api/v2/inventory/locations", locationRoutes);
 app.use("/api/v2/inventory/masters", inventoryMasterRoutes);
 
-// ✅ Procurement
+// Procurement
 app.use("/api/v2/procurement/purchaseOrders", purchaseOrderRoutes);
 
 // -------------------------------------------------------------------------
@@ -87,19 +84,18 @@ app.use("/api/v2/procurement/purchaseOrders", purchaseOrderRoutes);
 // -------------------------------------------------------------------------
 
 // 1. 404 Not Found हैंडलर
-app.use(notFound);
+app.use(notFound); // notFound is now a function from errorHandler.js
 
 // 2. ग्लोबल एरर हैंडलर
 app.use(errorHandler);
 // -------------------------------------------------------------------------
-// सर्वर शुरू करें (FINAL FIX: सर्वर ऑब्जेक्ट को कैप्चर करें और Timeout सेट करें)
+// सर्वर शुरू करें
 // -------------------------------------------------------------------------
 
 const server = app.listen(PORT, () => {
-  // ✅ FIX 1: 'server' वेरिएबल में असाइन करें
   console.log(`[Server] Server is running on port ${PORT}`);
 });
 
-// ✅ FIX 2: ECONNRESET त्रुटियों को रोकने के लिए Keep-Alive Timeout बढ़ाएँ
-server.keepAliveTimeout = 65000; // 65 सेकंड (मिलिसेकंड में)
-server.headersTimeout = 66000; // KeepAliveTimeout से थोड़ा अधिक सेट करें।
+// Keep-Alive Timeout सेट करें
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;

@@ -1,79 +1,59 @@
-/*
- * Context Note: यह एक केंद्रीय (central) एरर हैंडलिंग मिडलवेयर है।
- * यह 'APIError' क्लास को परिभाषित करता है ताकि हम HTTP स्टेटस कोड के साथ एरर फेंक सकें।
- */
+// File: src/utils/errorHandler.js
 
 /**
- * 1. कस्टम APIError क्लास
- * (पुराने /src/utils/errorHandler.js से)
+ * Custom Error class for structured API errors.
  */
-class APIError extends Error {
-    /**
-     * @param {string} message - एरर का विवरण।
-     * @param {number} statusCode - HTTP स्टेटस कोड (जैसे 400, 404, 500)।
-     */
-    constructor(message, statusCode = 500) {
-        super(message);
-        this.statusCode = statusCode;
-        this.name = 'APIError'; // एरर के प्रकार की पहचान के लिए
-        this.isOperational = true; // यह इंगित करता है कि यह एक ज्ञात एरर है
+class CustomError extends Error {
+  constructor(message, statusCode, details = null) {
+    super(message);
+    this.statusCode = statusCode || 500;
+    this.status = statusCode >= 400 && statusCode < 500 ? "fail" : "error";
+    this.isOperational = true;
+    this.details = details;
 
-        // स्टैक ट्रेस (stack trace) को कैप्चर करें
-        if (Error.captureStackTrace) {
-            Error.captureStackTrace(this, this.constructor);
-        }
-    }
+    Error.captureStackTrace(this, this.constructor);
+  }
 }
 
 /**
- * 2. ग्लोबल एरर हैंडलर मिडलवेयर
- * (पुराने /src/utils/errorHandler.js से)
- * इसे server.js में सभी रूट्स के बाद जोड़ा जाएगा।
+ * Global Error Handler Middleware.
  */
 const errorHandler = (err, req, res, next) => {
-    console.error('---------------------------------');
-    console.error('[Global Error Handler]:', err.name);
-    console.error('Path:', req.path);
-    console.error('Message:', err.message);
-    // console.error('Stack:', err.stack); // (डेवलपमेंट में डिबगिंग के लिए उपयोगी)
-    console.error('---------------------------------');
+  let error = { ...err };
+  error.statusCode = err.statusCode || 500;
+  error.status =
+    error.statusCode >= 400 && error.statusCode < 500 ? "fail" : "error";
+  error.message = err.message || "Something went wrong on the server.";
 
-    // यदि यह हमारा ज्ञात APIError है, तो उसका उपयोग करें
-    if (err instanceof APIError || err.isOperational) {
-        return res.status(err.statusCode).json({
-            message: err.message,
-            code: err.code || `HTTP_${err.statusCode}`
-        });
-    }
+  if (err.code === "23505") {
+    error.statusCode = 409;
+    error.message =
+      "Resource Conflict: A record with this unique value already exists.";
+    error.status = "fail";
+  }
 
-    // pg-promise से ज्ञात डेटाबेस एरर
-    if (err.code && typeof err.code === 'string' && err.code.length === 5 && err.code.startsWith('23')) {
-        // (जैसे 23505 = unique_violation, 23503 = foreign_key_violation)
-        return res.status(409).json({
-            message: 'Database Conflict. यह डेटा पहले से मौजूद हो सकता है या किसी अन्य रिकॉर्ड पर निर्भर है।',
-            code: `DB_${err.code}`
-        });
-    }
+  if (error.statusCode >= 500) {
+    console.error("FATAL SERVER ERROR:", err);
+  } else {
+    console.warn("Operational Error:", err.message, error.details);
+  }
 
-    // अज्ञात (Unknown) या अप्रत्याशित (unexpected) एरर
-    return res.status(500).json({
-        message: 'Internal Server Error. कुछ गलत हो गया है।',
-        code: 'SERVER_UNEXPECTED'
-    });
+  res.status(error.statusCode).json({
+    success: false,
+    status: error.status,
+    message: error.message,
+    ...(error.details && { details: error.details }),
+  });
 };
 
 /**
- * 3. 404 Not Found हैंडलर
- * (पुराने /src/app.js से)
- * इसे server.js में सभी API रूट्स के बाद, लेकिन errorHandler से पहले जोड़ा जाएगा।
+ * 404 Not Found Handler Middleware (MUST be a function).
  */
 const notFound = (req, res, next) => {
-    const error = new APIError(`Route not found: ${req.method} ${req.originalUrl}`, 404);
-    next(error); // इसे ग्लोबल एरर हैंडलर को भेजें
+  // Throws a 404 error using the CustomError class, which is then caught by errorHandler.
+  next(new CustomError(`Cannot find ${req.originalUrl} on this server!`, 404));
 };
 
-module.exports = {
-    APIError,
-    errorHandler,
-    notFound
-};
+module.exports = CustomError; // Default export
+module.exports.errorHandler = errorHandler; // Named export for global error handling
+module.exports.notFound = notFound; // NEW: Named export for 404 handling
