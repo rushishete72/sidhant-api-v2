@@ -1,4 +1,6 @@
-/* * Module: Security & Base Users (Master_Roles, Master_Users) */
+/* * Module: Security & Base Users (Master_Roles, Master_Users) 
+ * FIX: Added missing 'is_verified' column to master_users table.
+ */
 
 -- 1. Roles Table (RBAC / PBAC Core)
 CREATE TABLE IF NOT EXISTS master_roles (
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS master_users (
     role_id INTEGER REFERENCES master_roles(role_id) ON DELETE SET NULL,
     
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE, -- ✅ FIX: यह कॉलम जोड़ा गया
     last_login TIMESTAMP WITH TIME ZONE,
     
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,

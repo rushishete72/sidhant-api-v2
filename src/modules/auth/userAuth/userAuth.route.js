@@ -1,32 +1,39 @@
-/*
- * Context Note: यह auth मॉड्यूल के लिए API endpoints (routes) को परिभाषित करता है।
- * (UPGRADED: अब असली (real) कंट्रोलर फ़ंक्शंस का उपयोग कर रहा है)
+/**
+ * src/modules/auth/userAuth/userAuth.route.js - Final Route Layer
+ * MANDATES: Defines all API endpoints for the Auth module.
  */
-const express = require('express');
+
+const express = require("express");
 const router = express.Router();
-const controller = require('./userAuth.controller');
 
-// -------------------------------------------------------------------------
-// Routes Definition
-// (पुराने कोडबेस /src/modules/auth/userAuth/userAuth.route.js के आधार पर)
-// -------------------------------------------------------------------------
+// Import the final, fixed controller functions
+const {
+  register,
+  login,
+  verifyOtp,
+  forgotPassword,
+  resetPassword,
+  logout,
+} = require("./userAuth.controller");
 
-// POST /api/v2/auth/register
-router.post('/register', controller.register);
+// Note: Assuming these routes are mounted under /api/v1/auth
 
-// POST /api/v2/auth/verify-otp
-router.post('/verify-otp', controller.verifyOtp);
+// POST /api/v1/auth/register
+router.post("/register", register);
 
-// POST /api/v2/auth/login
-router.post('/login', controller.login);
+// POST /api/v1/auth/login
+router.post("/login", login);
 
-// POST /api/v2/auth/forgot-password
-router.post('/forgot-password', controller.forgotPassword);
+// POST /api/v1/auth/verify-otp
+router.post("/verify-otp", verifyOtp);
 
-// POST /api/v2/auth/reset-password
-router.post('/reset-password', controller.resetPassword);
+// POST /api/v1/auth/forgot-password (Initiates OTP send)
+router.post("/forgot-password", forgotPassword);
 
-// POST /api/v2/auth/logout
-router.post('/logout', controller.logout);
+// POST /api/v1/auth/reset-password
+router.post("/reset-password", resetPassword);
+
+// GET /api/v1/auth/logout
+router.get("/logout", logout);
 
 module.exports = router;

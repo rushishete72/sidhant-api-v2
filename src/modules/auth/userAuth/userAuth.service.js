@@ -1,172 +1,205 @@
-const { v4: uuidv4 } = require('uuid');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const db = require('../../../db');
-const model = require('./userAuth.model');
+/**
+ * src/modules/auth/userAuth/userAuth.service.js - Final Service Layer
+ * MANDATES: db.tx for CUD operations, bcrypt, emailSender calls.
+ * FIX: Implemented simple numeric OTP generation function.
+ */
 
-const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '12', 10);
-const JWT_SECRET = process.env.JWT_SECRET || 'replace_this_secret';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
-const OTP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const bcrypt = require("bcryptjs");
+const { db } = require("../../../../src/database/db");
+const { APIError } = require("../../../utils/errorHandler");
+const { sendVerificationEmail } = require("../../../utils/emailSender");
+const userAuthModel = require("./userAuth.model");
 
-async function registerUser({ email, password, name }) {
-  // basic pre-check (read)
-  const existing = await model.getUserByEmail(db, email);
-  if (existing) {
-    const err = new Error('Email already registered');
-    err.status = 409;
-    throw err;
-  }
+// --- Helper Functions ---
 
-  const id = uuidv4();
-  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+// âœ… FIX: Simple numeric OTP generator (No external dependency like 'uuid')
+const generateOtp = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit number
+};
 
-  // generate OTP for email verification
-  const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit
-  const otpHash = await bcrypt.hash(otp, SALT_ROUNDS);
-  const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
+// --- Core Service Functions ---
 
-  // Use tx for critical CUD operation (create user)
-  const created = await db.tx(async (t) => {
-    return model.createUser(t, {
-      id,
-      email,
-      name: name || null,
-      password_hash: passwordHash,
-      otp_hash: otpHash,
-      otp_expires_at: otpExpiresAt,
+/** 1. REGISTER USER: Creates user and initial OTP record in a transaction (db.tx). */
+async function registerUser({
+  email,
+  full_name,
+  password,
+  defaultRoleName = "Client",
+}) {
+  const saltRounds = Number(process.env.PASSWORD_SALT_ROUNDS) || 10;
+  const passwordHash = await bcrypt.hash(password, saltRounds);
+  const otpCode = generateOtp();
+  const otpHash = await bcrypt.hash(otpCode, saltRounds);
+  const otpExpiry = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes validity
+
+  try {
+    // START TRANSACTION: Ensure all DB operations succeed or fail together
+    const { user } = await db.tx(async (t) => {
+      const role = await userAuthModel.getOrCreateRole(t, defaultRoleName);
+
+      const newUser = await userAuthModel.createUser(t, {
+        email,
+        full_name,
+        role_id: role.role_id,
+        password_hash: passwordHash,
+      });
+
+      await userAuthModel.createOtp(t, {
+        user_id: newUser.user_id,
+        otp_hash: otpHash,
+        expires_at: otpExpiry,
+      });
+
+      return { user: newUser };
     });
-  });
+    // END TRANSACTION (COMMIT)
 
-  // NOTE: sending OTP via email/sms should happen outside the tx. Return OTP for dev/testing.
-  return {
-    user: created,
-    otp, // remove in production; here to allow integration of a mailer in caller
-  };
+    // Send verification email (Outside transaction)
+    await sendVerificationEmail({
+      to: user.email,
+      name: user.full_name,
+      otp: otpCode,
+    });
+
+    // Fetch full profile data before returning
+    const profile = await userAuthModel.getUserProfileData(null, user.user_id);
+    return { user: profile, otp: otpCode };
+  } catch (err) {
+    if (err && err.code === "23505") {
+      // PostgreSQL unique constraint violation
+      throw new APIError("Registration failed: Email already exists.", 409);
+    }
+    console.error("Registration error:", err);
+    throw new APIError("User registration failed due to a server error.", 500);
+  }
 }
 
+/** 2. VERIFY OTP: Checks OTP, updates user verification status, and deletes OTP in a transaction. */
 async function verifyOtp({ email, otp }) {
-  const user = await model.getUserByEmail(db, email);
-  if (!user) {
-    const err = new Error('User not found');
-    err.status = 404;
-    throw err;
-  }
-  if (user.is_verified) {
-    const err = new Error('User already verified');
-    err.status = 400;
-    throw err;
-  }
-  if (!user.otp_hash || !user.otp_expires_at) {
-    const err = new Error('No OTP present for this account');
-    err.status = 400;
-    throw err;
-  }
-  if (new Date(user.otp_expires_at) < new Date()) {
-    const err = new Error('OTP expired');
-    err.status = 400;
-    throw err;
-  }
+  return db.tx(async (t) => {
+    // 1. Fetch user by email
+    const user = await userAuthModel.getUserByEmail(t, email);
+    if (!user) {
+      throw new APIError("Verification failed: User not found.", 404);
+    }
 
-  const matched = await bcrypt.compare(otp, user.otp_hash);
-  if (!matched) {
-    const err = new Error('Invalid OTP');
-    err.status = 401;
-    throw err;
-  }
+    // 2. Fetch OTP hash
+    const otpRecord = await userAuthModel.getOtpByUserId(t, user.user_id);
+    if (!otpRecord) {
+      throw new APIError(
+        "Invalid or expired OTP. Please request a new one.",
+        401
+      );
+    }
 
-  // Use tx to atomically mark verified and clear otp fields
-  const updated = await db.tx(async (t) => {
-    return model.verifyUserById(t, user.id);
+    // 3. Check expiry and hash
+    const isOtpValid = await bcrypt.compare(otp, otpRecord.otp_hash);
+    const isExpired = new Date() > otpRecord.expires_at;
+
+    if (!isOtpValid || isExpired) {
+      throw new APIError("Invalid OTP or OTP expired/attempts exceeded.", 401);
+    }
+
+    // 4. Atomically update user and delete OTP
+    await userAuthModel.updateUserVerificationStatus(t, user.user_id, true);
+    await userAuthModel.deleteOtp(t, user.user_id);
+
+    // 5. Return updated user profile
+    return userAuthModel.getUserProfileData(t, user.user_id);
   });
-
-  return updated;
 }
 
+/** 3. LOGIN USER: Authenticates user by password and returns profile data. */
 async function loginUser({ email, password }) {
-  const user = await model.getUserByEmail(db, email);
-  if (!user) {
-    const err = new Error('Invalid credentials');
-    err.status = 401;
-    throw err;
-  }
-  if (!user.is_verified) {
-    const err = new Error('Email not verified');
-    err.status = 403;
-    throw err;
-  }
-  const ok = await bcrypt.compare(password, user.password_hash);
-  if (!ok) {
-    const err = new Error('Invalid credentials');
-    err.status = 401;
-    throw err;
+  const user = await userAuthModel.getUserByEmail(null, email);
+  if (!user || user.is_active === false) {
+    throw new APIError("Invalid credentials.", 401);
   }
 
-  const payload = { sub: user.id, email: user.email };
-  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  // 1. Check if user is verified
+  if (user.is_verified === false) {
+    throw new APIError("Account not verified. Please verify your OTP.", 403);
+  }
 
-  // Optionally persist session / token (revocation list or sessions) - lightweight here
-  return { user: { id: user.id, email: user.email, name: user.name }, token };
+  // 2. Compare password hash
+  const isMatch = await bcrypt.compare(password, user.password_hash);
+  if (!isMatch) {
+    throw new APIError("Invalid credentials.", 401);
+  }
+
+  // 3. Fetch canonical profile (role, permissions)
+  const profile = await userAuthModel.getUserProfileData(null, user.user_id);
+
+  return { user: profile, profile };
 }
 
+/** 4. FORGOT PASSWORD: Creates a new OTP for password reset. */
 async function forgotPassword({ email }) {
-  const user = await model.getUserByEmail(db, email);
+  const user = await userAuthModel.getUserByEmail(null, email);
   if (!user) {
-    // For security, do not reveal existence — return success-like response.
-    return { ok: true };
+    // Security by obscurity: return success even if user not found
+    return { message: "If account exists, OTP sent." };
   }
 
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const otpHash = await bcrypt.hash(otp, SALT_ROUNDS);
-  const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
+  const otpCode = generateOtp();
+  const saltRounds = Number(process.env.PASSWORD_SALT_ROUNDS) || 10;
+  const otpHash = await bcrypt.hash(otpCode, saltRounds);
+  const otpExpiry = new Date(Date.now() + 5 * 60 * 1000);
 
-  await model.setUserOtp(db, user.id, otpHash, otpExpiresAt);
-
-  // In production, send OTP by email/SMS here. Return OTP for dev/testing.
-  return { ok: true, otp };
-}
-
-async function resetPassword({ email, otp, newPassword }) {
-  const user = await model.getUserByEmail(db, email);
-  if (!user) {
-    const err = new Error('User not found');
-    err.status = 404;
-    throw err;
-  }
-  if (!user.otp_hash || !user.otp_expires_at) {
-    const err = new Error('No OTP present for this account');
-    err.status = 400;
-    throw err;
-  }
-  if (new Date(user.otp_expires_at) < new Date()) {
-    const err = new Error('OTP expired');
-    err.status = 400;
-    throw err;
-  }
-  const otpOk = await bcrypt.compare(otp, user.otp_hash);
-  if (!otpOk) {
-    const err = new Error('Invalid OTP');
-    err.status = 401;
-    throw err;
-  }
-
-  const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-
-  // Use tx for critical CUD (password update + clear otp)
-  const updated = await db.tx(async (t) => {
-    return model.updatePassword(t, user.id, newHash);
+  // Update/Insert OTP record
+  await userAuthModel.createOtp(null, {
+    user_id: user.user_id,
+    otp_hash: otpHash,
+    expires_at: otpExpiry,
   });
 
-  return updated;
+  // Send email
+  await sendVerificationEmail({
+    to: user.email,
+    name: user.full_name,
+    otp: otpCode,
+  });
+
+  return { otp: otpCode };
 }
 
+/** 5. RESET PASSWORD: Verifies OTP, hashes new password, and updates user in a transaction. */
+async function resetPassword({ email, otp, newPassword }) {
+  // Use db.tx for atomicity: verify OTP and update password
+  return db.tx(async (t) => {
+    // 1. Fetch user
+    const user = await userAuthModel.getUserByEmail(t, email);
+    if (!user) {
+      throw new APIError("Password reset failed: User not found.", 404);
+    }
+
+    // 2. Check OTP hash and expiry
+    const otpRecord = await userAuthModel.getOtpByUserId(t, user.user_id);
+    if (!otpRecord) {
+      throw new APIError("Invalid OTP or OTP expired.", 401);
+    }
+
+    const isOtpValid = await bcrypt.compare(otp, otpRecord.otp_hash);
+    const isExpired = new Date() > otpRecord.expires_at;
+
+    if (!isOtpValid || isExpired) {
+      throw new APIError("Invalid OTP or OTP expired.", 401);
+    }
+
+    // 3. Hash new password and update user record (Model handles hashing)
+    await userAuthModel.updateUserPassword(t, user.user_id, newPassword);
+
+    // 4. Delete the used OTP record
+    await userAuthModel.deleteOtp(t, user.user_id);
+
+    // 5. Return updated profile
+    return userAuthModel.getUserProfileData(t, user.user_id);
+  });
+}
+
+/** 6. LOGOUT USER: No DB operation needed for JWT/Cookie based logout. */
 async function logoutUser({ token }) {
-  if (!token) {
-    return { ok: true };
-  }
-  // Persist token to revocation store (no tx required here)
-  await model.revokeToken(db, token);
-  return { ok: true };
+  return { message: "Token implicitly invalidated." };
 }
 
 module.exports = {

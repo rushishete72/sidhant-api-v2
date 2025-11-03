@@ -31,14 +31,14 @@ INSERT INTO master_roles (role_name, description, permissions) VALUES
 
 -- 2. Initial Admin User
 -- Note: 'employee_id' और 'phone_number' कॉलम नए स्कीमा से हटा दिए गए हैं।
-INSERT INTO master_users (full_name, email, password_hash, role_id, is_active) VALUES
+INSERT INTO master_users (full_name, email, password_hash, role_id, is_active,is_verified) VALUES
 (
     'System Administrator', 
     'rushishete72@gmail.com', 
     -- 'password123' का सैंपल हैश
     '$2a$10$w1e7F/n/uTzM3I0J0bS1w.i/nJ0bS1w.i/nJ0bS1w.i', 
     (SELECT role_id FROM master_roles WHERE role_name = 'System_Admin'),
-    TRUE
+    TRUE,TRUE
 )
 ON CONFLICT (email) DO NOTHING;
 
