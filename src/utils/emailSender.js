@@ -1,6 +1,6 @@
 /**
  * src/utils/emailSender.js - World-Class, Robust SMTP Utility
- * (FINAL FIX: Ensures EMAIL_PASSWORD from .env is correctly mapped to local EMAIL_PASS variable)
+ * (FINAL VERSION: Correctly maps EMAIL_PASSWORD, uses caching, verification, and clear helpers)
  */
 "use strict";
 
@@ -9,15 +9,16 @@ const nodemailer = require("nodemailer");
 const ErrorHandler = require("./errorHandler");
 
 // =========================================================================
-// ✅ FIX: Correctly map EMAIL_PASSWORD from process.env to local EMAIL_PASS
+// ✅ FINAL FIX: Correctly map EMAIL_PASSWORD from process.env to local EMAIL_PASS
 // =========================================================================
 const EMAIL_HOST = process.env.EMAIL_HOST;
 const EMAIL_PORT = process.env.EMAIL_PORT;
 const EMAIL_USER = process.env.EMAIL_USER;
-// 🛑 CRITICAL FIX: Ensure local variable EMAIL_PASS is loaded from EMAIL_PASSWORD
+// 🛑 CRITICAL FIX: Load from EMAIL_PASSWORD to match the .env file
 const EMAIL_PASS = process.env.EMAIL_PASSWORD;
 // =========================================================================
 
+// EMAIL_SENDER_NAME का उपयोग करके 'From' एड्रेस को बेहतर बनाएं
 const EMAIL_FROM = process.env.EMAIL_SENDER_NAME
   ? `${process.env.EMAIL_SENDER_NAME} <${EMAIL_USER}>`
   : EMAIL_USER;
@@ -35,7 +36,7 @@ function getTransporter() {
   // Check the critical four variables
   if (!EMAIL_HOST || !EMAIL_PORT || !EMAIL_USER || !EMAIL_PASS) {
     console.warn(
-      "⚠️ emailSender: Skipping initialization. Missing EMAIL_HOST, EMAIL_PORT, EMAIL_USER, or EMAIL_PASSWORD."
+      "⚠️ emailSender: Skipping initialization. Missing SMTP credentials."
     );
     return null;
   }
@@ -47,7 +48,7 @@ function getTransporter() {
     transporter = nodemailer.createTransport({
       host: EMAIL_HOST,
       port: portNum,
-      secure: isSecure, // Port 465 के लिए 'secure' true होता है, अन्यथा false
+      secure: isSecure,
       auth: {
         user: EMAIL_USER,
         pass: EMAIL_PASS, // ✅ NOW Correctly loaded from EMAIL_PASSWORD
@@ -55,6 +56,7 @@ function getTransporter() {
       connectionTimeout: 30_000,
       greetingTimeout: 30_000,
       socketTimeout: 30_000,
+      // Production में, self-signed errors से बचने के लिए tls: { rejectUnauthorized: false } को हटा दें
     });
   } catch (e) {
     console.error("emailSender: Transporter initialization failed:", e.message);
@@ -72,6 +74,9 @@ async function verifyTransporter(t) {
   try {
     await t.verify();
     transporterVerified = true;
+    console.log(
+      "✅ emailSender: Transporter connection verified successfully."
+    );
   } catch (err) {
     console.warn(
       "emailSender: Transporter verification failed — emails may not send:",
@@ -82,11 +87,9 @@ async function verifyTransporter(t) {
 
 /**
  * Core function to send an email.
- * @param {object} options - Email options: to, subject, text, html.
- * @returns {Promise<object>} - Message ID or skipped status.
  */
 async function sendEmail({ to, subject, text, html } = {}) {
-  // ... (parameter validation same as your uploaded version)
+  // Basic parameter validation
   if (!to) {
     throw new Error('sendEmail: "to" parameter is required');
   }
@@ -99,18 +102,13 @@ async function sendEmail({ to, subject, text, html } = {}) {
 
   const t = getTransporter();
   if (!t) {
-    // Missing configuration — do not attempt to send. Log and return a skipped result.
     console.warn(
       "[EMAIL SKIP] Service is disabled due to missing SMTP configuration."
     );
-    return {
-      skipped: true,
-      reason: "missing_smtp_configuration",
-      to,
-      subject,
-    };
+    return { skipped: true, reason: "missing_smtp_configuration", to, subject };
   }
 
+  // Verification is best-effort and runs only once
   await verifyTransporter(t);
 
   const mailOptions = {
@@ -124,10 +122,7 @@ async function sendEmail({ to, subject, text, html } = {}) {
   try {
     const info = await t.sendMail(mailOptions);
     console.log(`[EMAIL SUCCESS] Sent to ${to}. ID: ${info.messageId}`);
-    return {
-      skipped: false,
-      info,
-    };
+    return { skipped: false, info };
   } catch (err) {
     // Wrap and rethrow using project's ErrorHandler (using 502 for SMTP/network errors)
     const message = `Failed to send email to ${
@@ -161,7 +156,6 @@ async function sendVerificationEmail({ to, name, otp }) {
     name || to
   }, your OTP is ${otp}. This code is valid for 5 minutes.`;
 
-  // Delegate the actual sending to the core sendEmail function
   return sendEmail({ to, subject, text, html });
 }
 

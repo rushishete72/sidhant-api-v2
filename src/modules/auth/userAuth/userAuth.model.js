@@ -37,14 +37,14 @@ const ensureDefaultRoleExists = async (roleName) => {
 }
 
 /** 2. उपयोगकर्ता को ईमेल द्वारा ढूंढता है। (लॉगिन/प्रोफ़ाइल लुकअप के लिए उपयोग किया जाता है) */
-const getUserByEmail = async (email) => {
-    const query = `
-        SELECT u.user_id, u.email, u.full_name, r.role_name AS role, u.is_active, u.password_hash 
-        FROM ${USER_TABLE} u
-        JOIN ${ROLE_TABLE} r ON u.role_id = r.role_id
-        WHERE u.email = $1 AND u.is_active = TRUE
-    `;
-    return db.oneOrNone(query, [email]);
+const getUserByEmail = async (dbOrT, email) => {
+    // dbOrT can be the root db or a transaction object
+    return dbOrT.oneOrNone(
+        `SELECT id, email, name, password_hash, is_verified, otp_hash, otp_expires_at, created_at, updated_at
+         FROM ${USER_TABLE}
+         WHERE email = $1`,
+        [email]
+    );
 };
 
 /** 3. एक नया उपयोगकर्ता रजिस्टर करता है। (is_verified हटा दिया गया है) */
@@ -157,6 +157,15 @@ const deleteOtp = async (userId) => {
     return db.none(`DELETE FROM ${OTP_TABLE} WHERE user_id = $1`, [userId]);
 };
 
+/** 9. हल्का टोकन रद्द करना: टोकन स्ट्रिंग और इसे रद्द करने की तारीख़ स्टोर करें */
+const revokeToken = async (db, token) => {
+    return db.none(
+        `INSERT INTO revoked_tokens (token, revoked_at)
+         VALUES ($1, now())`,
+        [token]
+    );
+}
+
 // =========================================================================
 // FINAL EXPORTS 
 // =========================================================================
@@ -169,4 +178,5 @@ module.exports = {
     deleteOtp, 
     getUserProfileData,
     updateUserPassword,
+    revokeToken,
 };

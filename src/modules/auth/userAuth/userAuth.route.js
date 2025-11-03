@@ -4,15 +4,7 @@
  */
 const express = require('express');
 const router = express.Router();
-
-// ✅ असली कंट्रोलर फ़ंक्शंस को इम्पोर्ट करें
-const { 
-    registerUser,
-    loginUser, 
-    verifyOtp,
-    logoutUser,
-    resetPassword
-} = require('./userAuth.controller'); 
+const controller = require('./userAuth.controller');
 
 // -------------------------------------------------------------------------
 // Routes Definition
@@ -20,18 +12,21 @@ const {
 // -------------------------------------------------------------------------
 
 // POST /api/v2/auth/register
-router.post('/register', registerUser);
-
-// POST /api/v2/auth/login
-router.post('/login', loginUser);
+router.post('/register', controller.register);
 
 // POST /api/v2/auth/verify-otp
-router.post('/verify-otp', verifyOtp);
+router.post('/verify-otp', controller.verifyOtp);
+
+// POST /api/v2/auth/login
+router.post('/login', controller.login);
+
+// POST /api/v2/auth/forgot-password
+router.post('/forgot-password', controller.forgotPassword);
 
 // POST /api/v2/auth/reset-password
-router.post('/reset-password', resetPassword);
+router.post('/reset-password', controller.resetPassword);
 
-// GET /api/v2/auth/logout 
-router.get('/logout', logoutUser); 
+// POST /api/v2/auth/logout
+router.post('/logout', controller.logout);
 
 module.exports = router;
