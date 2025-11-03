@@ -1,7 +1,9 @@
 // File: src/database/db.js
-// FINAL, 100% CORRECTED VERSION
-// This version fixes the "invalid command-line argument" error AND
-// correctly sets the search_path by returning a promise in the 'connect' event.
+
+// [CRITICAL SELF-CORRECTION PROTOCOL]
+// The "read ECONNRESET" error is most often a network/firewall issue.
+// We implement pg-promise/pg enhancements (keepAlive) to handle intermittent resets,
+// but the user MUST check their PostgreSQL provider's firewall settings.
 
 const pgp = require("pg-promise")({
   /* Initialization Options */
@@ -9,9 +11,8 @@ const pgp = require("pg-promise")({
     const cp = e.client.connectionParameters;
     console.log(`[DB] सफलतापूर्वक डेटाबेस से कनेक्ट हुआ: ${cp.database}`);
 
-    // CRITICAL FIX: Return the promise.
-    // pg-promise will wait for this promise to resolve
-    // before releasing the connection for its first use.
+    // CRITICAL FIX (Atomicity/Schema-Safety): Return the promise for search_path.
+    // pg-promise waits for this promise to resolve before using the connection.
     // This 100% solves the "relation does not exist" race condition.
     return e.client.query(
       "SET search_path = users, masters, inventory, qc, procurement, public"
@@ -36,33 +37,33 @@ if (!connectionString) {
 }
 
 // 2. Determine SSL configuration
-const isRenderHost = connectionString.includes(".render.com");
+// Added more robust production check for cloud hosts
+const isProduction =
+  process.env.NODE_ENV === "production" ||
+  connectionString.includes(".render.com") ||
+  connectionString.includes(".railway.app") ||
+  connectionString.includes("aws-region");
 let sslConfig;
 
-if (isRenderHost) {
+if (isProduction) {
   console.log(
-    "[DB] Production/Render.com SSL (rejectUnauthorized: false) के साथ कनेक्ट हो रहा है।"
+    "[DB] प्रोडक्शन/बाहरी होस्ट SSL (rejectUnauthorized: false) का उपयोग किया जा रहा है।"
   );
   sslConfig = {
-    rejectUnauthorized: false, // Required for Render
+    rejectUnauthorized: false, // Required for many cloud providers (like Render)
   };
 } else {
-  // We check NODE_ENV for local development
-  const isProduction = process.env.NODE_ENV === "production";
-  if (isProduction) {
-    console.log("[DB] Production (Non-Render) SSL के साथ कनेक्ट हो रहा है।");
-    sslConfig = { rejectUnauthorized: false };
-  } else {
-    console.log("[DB] Local development (no SSL) के साथ कनेक्ट हो रहा है।");
-    sslConfig = undefined; // local dev
-  }
+  console.log("[DB] लोकल डेवलपमेंट (कोई SSL नहीं) का उपयोग किया जा रहा है।");
+  sslConfig = false; // Explicitly setting false for local is safer than undefined
 }
 
-// 3. Create the connection object
+// 3. Create the connection object with stability enhancements
 const cn = {
   connectionString: connectionString,
   ssl: sslConfig,
-  statement_timeout: 10000, // 10 seconds
+  statement_timeout: 10000, // Query timeout: 10 seconds
+  keepAlive: true, // ENHANCEMENT: Prevents dropped connections due to inactivity
+  keepAliveInitialDelay: 1000, // Optional delay setting
   // The 'options' fix was incorrect and has been REMOVED.
 };
 
@@ -75,7 +76,11 @@ db.one("SELECT 1 AS value")
     console.log("[DB] कनेक्शन टेस्ट सफल। (SELECT 1)");
   })
   .catch((error) => {
-    console.error("[DB] !!डेटाबेस कनेक्शन टेस्ट विफल!!:", error.message);
+    console.error(
+      "[DB] !!डेटाबेस कनेक्शन टेस्ट विफल!!:",
+      "ECONNRESET is typically a firewall/IP whitelist issue on your database host.",
+      error.message
+    );
   });
 
 module.exports = { db, pgp };

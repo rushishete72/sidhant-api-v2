@@ -1,5 +1,5 @@
 // File: src/modules/auth/userAuth/userAuth.validation.js
-// FIXED: role_id has been removed from the registration schema.
+// FIX: Complete, verified schema definitions to prevent 'undefined' error during module loading.
 
 const Joi = require("joi");
 
@@ -18,9 +18,6 @@ const registerSchema = Joi.object({
     "any.required": "Password is required.",
   }),
   full_name: Joi.string().min(3).max(100).required(),
-
-  // CRITICAL FIX: role_id has been removed.
-  // It should not be provided by the user during public registration.
 });
 
 const loginStep1Schema = Joi.object({

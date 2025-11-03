@@ -12,8 +12,10 @@ const {
   forgotPasswordStep2,
 } = require("./userAuth.controller");
 
+// CRITICAL FIX: Ensure the middleware is imported as 'validate', not 'validation'.
+// The utils file exports it as 'validate'.
 const { validate } = require("../../../utils/validation");
-const { authenticate } = require("../../../middleware/auth"); // FIX: using named export 'authenticate'
+const { authenticate } = require("../../../middleware/auth");
 
 const {
   registerSchema,
@@ -24,6 +26,7 @@ const {
 } = require("./userAuth.validation");
 
 // --- Public Routes ---
+// CORRECT USAGE: validate(schema) is a function call returning the middleware.
 router.post("/register", validate(registerSchema), register);
 router.post("/login/step1", validate(loginStep1Schema), loginStep1);
 router.post("/login/step2", validate(loginStep2Schema), loginStep2);
@@ -39,6 +42,6 @@ router.post(
 );
 
 // --- Protected Routes ---
-router.post("/logout", authenticate, logout); // FIX: using 'authenticate'
+router.post("/logout", authenticate, logout);
 
 module.exports = router;

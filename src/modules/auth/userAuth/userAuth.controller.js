@@ -10,7 +10,6 @@ const asyncHandler = require("../../../utils/asyncHandler");
  */
 const register = asyncHandler(async (req, res) => {
   // CRITICAL FIX: Only destructure fields that are in the Joi schema.
-  // role_id is no longer accepted from the client.
   const { email, password, full_name } = req.body;
 
   // Pass only the validated fields to the service.
@@ -97,11 +96,12 @@ const forgotPasswordStep1 = asyncHandler(async (req, res) => {
  * POST /api/v2/auth/forgot-password/step2
  */
 const forgotPasswordStep2 = asyncHandler(async (req, res) => {
-  const { email, otp, new_password } = req.body;
+  // CRITICAL FIX: Ensure req.body field matches the Service function signature (newPassword was used previously)
+  const { email, otp, newPassword } = req.body;
   const result = await UserAuthService.resetPassword_verifyOTP_updatePassword(
     email,
     otp,
-    new_password
+    newPassword
   );
 
   res.status(200).json({

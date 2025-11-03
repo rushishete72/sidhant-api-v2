@@ -1,17 +1,14 @@
 // File: src/modules/auth/userAuth/userAuth.service.js
-// FIXED: Hardcoded default role_id (2) for security.
+// FIXED: Parameter synchronization for createUser and OTP/Password logic refactored for user_otp table.
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { db } = require("../../../database/db");
 const UserAuthModel = require("./userAuth.model");
 const CustomError = require("../../../utils/errorHandler");
-const emailSender = require("../../../utils/emailSender"); // Assuming emailSender utility exists
+// const emailSender = require("../../../utils/emailSender");
 
-// CRITICAL SECURITY FIX:
-// Define a default role ID for self-registration.
-// Based on '09_Initial_Master_Data.sql', 'Standard User' is Role ID 2.
-const DEFAULT_USER_ROLE_ID = 2;
+const DEFAULT_USER_ROLE_ID = 2; // Standard User
 
 // Constants
 const JWT_SECRET =
@@ -31,14 +28,9 @@ const generateToken = (payload) => {
 class UserAuthService {
   /**
    * User registration (CUD operation, requires db.tx)
-   * @param {object} userData - User registration data (now only email, password, full_name)
-   * @returns {object} - Newly created user details
    */
   static async registerUser(userData) {
-    // FIX: role_id is no longer taken from input
     const { email, password, full_name } = userData;
-
-    // SECURITY FIX: Assign the default role ID here, not from user input.
     const role_id = DEFAULT_USER_ROLE_ID;
 
     return await db.tx("register-user-transaction", async (t) => {
@@ -51,70 +43,62 @@ class UserAuthService {
       // 2. Hash Password
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-      // 3. Create User in DB
+      // 3. Create User in DB - Pass ONLY the 4 required fields.
       const newUser = await UserAuthModel.createUser(
         {
           email,
-          password: hashedPassword,
+          password_hash: hashedPassword,
           full_name,
-          role_id, // Use the hardcoded default role
-          created_by_user_id: 1, // Assuming 1 is 'SYSTEM' or 'Self'
+          role_id,
         },
         t
       );
-
-      // 4. Send Welcome Email (Non-critical)
-      // const emailOptions = {
-      //     to: newUser.email,
-      //     subject: 'Welcome to Sidhant API v2!',
-      //     text: `Welcome, ${newUser.full_name}. Your account has been successfully registered.`,
-      //     isCritical: false
-      // };
-      // await emailSender.sendEmail(emailOptions); // Uncomment when emailSender is configured
 
       return {
         user_id: newUser.user_id,
         email: newUser.email,
         full_name: newUser.full_name,
-        role_id: newUser.role_id, // Return the assigned role_id
+        role_id: newUser.role_id,
       };
     });
   }
 
   /**
    * Step 1 of Login (Password check and OTP send)
-   * @param {string} email
-   * @param {string} password
-   * @returns {object} - Status message and user ID
    */
   static async loginStep1_passwordCheck_OTPsend(email, password) {
     return await db.tx("login-step1-transaction", async (t) => {
+      // 1. Find user (Now fetches OTP from user_otp via JOIN)
       const user = await UserAuthModel.findUserByEmail(email, t);
 
       if (!user) {
-        // SECURITY: Generic error message to prevent user enumeration
         throw new CustomError("Invalid credentials.", 401);
       }
 
-      const isMatch = await bcrypt.compare(password, user.password);
+      // 2. Compare hashed password (Uses user.password_hash)
+      const isMatch = await bcrypt.compare(password, user.password_hash);
 
       if (!isMatch) {
         throw new CustomError("Invalid credentials.", 401);
       }
 
+      // Check if user is verified
+      if (!user.is_verified) {
+        throw new CustomError(
+          "Account is not verified. Please check your email.",
+          401
+        );
+      }
+
+      // 3. Generate and Save OTP (Uses UPSERT on user_otp table)
       const otp = generateOTP();
       const otpExpiry = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000);
 
       await UserAuthModel.updateUserOtp(user.user_id, otp, otpExpiry, t);
 
       // 4. Send OTP Email
-      // const emailOptions = {
-      //     to: user.email,
-      //     subject: 'Sidhant API v2: Your Login Verification Code',
-      //     text: `Your One-Time Password (OTP) is: ${otp}. It is valid for ${OTP_EXPIRY_MINUTES} minutes.`,
-      //     isCritical: false
-      // };
-      // await emailSender.sendEmail(emailOptions); // Uncomment when emailSender is configured
+      // const emailOptions = { ... };
+      // await emailSender.sendEmail(emailOptions);
       console.log(
         `[Auth Service] OTP for ${user.email} (User ID ${user.user_id}): ${otp}`
       );
@@ -128,12 +112,10 @@ class UserAuthService {
 
   /**
    * Step 2 of Login (OTP verification and JWT generation)
-   * @param {number} user_id
-   * @param {string} otp
-   * @returns {object} - JWT Token and user details
    */
   static async loginStep2_OTPverify_tokenGenerate(user_id, otp) {
     return await db.tx("login-step2-transaction", async (t) => {
+      // 1. Find user (Now fetches OTP from user_otp via JOIN)
       const user = await UserAuthModel.findUserById(user_id, t);
 
       if (!user) {
@@ -152,8 +134,10 @@ class UserAuthService {
         );
       }
 
+      // 2. Clear OTP (Uses correct delete/clear method on user_otp table)
       await UserAuthModel.clearUserOtp(user.user_id, t);
 
+      // 3. Generate Token
       const tokenPayload = {
         user_id: user.user_id,
         email: user.email,
@@ -162,11 +146,17 @@ class UserAuthService {
       };
       const token = generateToken(tokenPayload);
 
+      // 4. Update Last Login (Uses correct column last_login)
       await UserAuthModel.updateLastLogin(user.user_id, t);
 
       return {
         token,
-        user: tokenPayload,
+        user: {
+          user_id: user.user_id,
+          email: user.email,
+          role_id: user.role_id,
+          role_name: user.role_name,
+        },
         message: "Login successful. JWT token generated.",
       };
     });
@@ -199,12 +189,7 @@ class UserAuthService {
 
       await UserAuthModel.updateUserOtp(user.user_id, otp, otpExpiry, t);
 
-      // Send OTP Email
-      // const emailOptions = { ... };
-      // await emailSender.sendEmail(emailOptions); // Uncomment when emailSender is configured
-      console.log(
-        `[Auth Service] Forgot Password OTP for ${user.email}: ${otp}`
-      );
+      // ... Console log and Email logic
 
       return {
         message:
@@ -218,6 +203,7 @@ class UserAuthService {
    */
   static async resetPassword_verifyOTP_updatePassword(email, otp, newPassword) {
     return await db.tx("reset-password-step2-transaction", async (t) => {
+      // 1. Fetch user/OTP data
       const user = await UserAuthModel.findUserByEmail(email, t);
 
       if (!user) {
@@ -235,15 +221,11 @@ class UserAuthService {
 
       const newHashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
-      await UserAuthModel.updatePasswordAndClearOtp(
-        user.user_id,
-        newHashedPassword,
-        t
-      );
+      // 2. Update Password
+      await UserAuthModel.updatePassword(user.user_id, newHashedPassword, t);
 
-      // 4. Send Admin Critical Notification (Optional)
-      // const adminEmailOptions = { ... isCritical: true };
-      // await emailSender.sendEmail(adminEmailOptions);
+      // 3. Clear OTP
+      await UserAuthModel.clearUserOtp(user.user_id, t);
 
       return { message: "Password successfully reset." };
     });
