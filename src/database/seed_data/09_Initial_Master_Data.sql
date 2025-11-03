@@ -34,7 +34,7 @@ INSERT INTO master_roles (role_name, description, permissions) VALUES
 INSERT INTO master_users (full_name, email, password_hash, role_id, is_active) VALUES
 (
     'System Administrator', 
-    'admin@sidhant.com', 
+    'rushishete72@gmail.com', 
     -- 'password123' का सैंपल हैश
     '$2a$10$w1e7F/n/uTzM3I0J0bS1w.i/nJ0bS1w.i/nJ0bS1w.i', 
     (SELECT role_id FROM master_roles WHERE role_name = 'System_Admin'),

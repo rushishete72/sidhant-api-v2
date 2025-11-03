@@ -21,8 +21,8 @@ SELECT
     (SELECT bin_id FROM inventory_bin_locations WHERE bin_code = 'A-01-01'), -- Receiving Bin ID
     'NET_30', 
     'AUTHORIZED', 
-    (SELECT user_id FROM master_users WHERE email = 'admin@sidhant.com'), 
-    (SELECT user_id FROM master_users WHERE email = 'admin@sidhant.com'), 
+    (SELECT user_id FROM master_users WHERE email = 'rushishete72@gmail.com'), 
+    (SELECT user_id FROM master_users WHERE email = 'rushishete72@gmail.com'), 
     CURRENT_TIMESTAMP
 ON CONFLICT (po_number) DO NOTHING;
 

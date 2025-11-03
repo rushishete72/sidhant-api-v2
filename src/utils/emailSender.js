@@ -36,8 +36,7 @@ function getTransporter() {
     auth: {
       user: EMAIL_USER,
       pass: EMAIL_PASS,
-    },
-    // sensible defaults; users can override via env if they wire up nodemailer differently
+    }, // sensible defaults; users can override via env if they wire up nodemailer differently
     connectionTimeout: 30_000,
     greetingTimeout: 30_000,
     socketTimeout: 30_000,
@@ -113,8 +112,7 @@ async function sendEmail({ to, subject, text, html } = {}) {
   };
 
   try {
-    const info = await t.sendMail(mailOptions);
-    // nodemailer returns an info object with messageId and envelope, include it for callers
+    const info = await t.sendMail(mailOptions); // nodemailer returns an info object with messageId and envelope, include it for callers
     return {
       skipped: false,
       info,
@@ -131,8 +129,7 @@ async function sendEmail({ to, subject, text, html } = {}) {
       if (typeof ErrorHandler === "function") {
         // Some ErrorHandler implementations accept (message, statusCode)
         // Use 502 as a common network/SMTP error code mapping.
-        const wrapped = new ErrorHandler(message, 502);
-        // If environment supports Error.cause, attach original error
+        const wrapped = new ErrorHandler(message, 502); // If environment supports Error.cause, attach original error
         if (
           typeof wrapped === "object" &&
           "cause" in Error.prototype === false
@@ -143,13 +140,45 @@ async function sendEmail({ to, subject, text, html } = {}) {
       }
     } catch (wrapErr) {
       // Fall through to generic throw below if ErrorHandler usage failed.
-    }
+    } // Fallback: throw a generic Error with original error attached
 
-    // Fallback: throw a generic Error with original error attached
     const generic = new Error(message);
     generic.originalError = err;
     throw generic;
   }
 }
 
-module.exports = sendEmail;
+// --- FIX: Added specific wrapper function for verification email ---
+/**
+ * sendVerificationEmail({ to, name, otp })
+ * Helper function to structure the verification email data and call sendEmail.
+ */
+async function sendVerificationEmail({ to, name, otp }) {
+  if (!to || !otp) {
+    throw new Error(
+      'sendVerificationEmail: "to" and "otp" parameters are required.'
+    );
+  }
+
+  const subject = "Verify your Account / OTP for Login";
+  const html = `
+        <h1>Hello ${name || to},</h1>
+        <p>Your One-Time Password (OTP) for account verification is:</p>
+        <h2 style="color:#007bff;">${otp}</h2>
+        <p>This code is valid for 5 minutes.</p>
+        <p>Thank you.</p>
+    `;
+  const text = `Hello ${
+    name || to
+  }, your OTP is ${otp}. This code is valid for 5 minutes.`;
+
+  // Delegate the actual sending to the core sendEmail function
+  return sendEmail({ to, subject, text, html });
+}
+// --- END FIX ---
+
+// --- FIX: Exporting both sendEmail and the new helper function ---
+module.exports = {
+  sendEmail,
+  sendVerificationEmail,
+};
