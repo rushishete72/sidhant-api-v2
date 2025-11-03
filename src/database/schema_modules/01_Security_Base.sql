@@ -42,8 +42,10 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 -- 4. User OTP Table (For password reset and verification)
 CREATE TABLE IF NOT EXISTS user_otp (
     user_id INTEGER PRIMARY KEY REFERENCES master_users(user_id) ON DELETE CASCADE,
-    otp_code VARCHAR(255) NOT NULL, -- Hashed OTP Code
+    otp_code VARCHAR(255) NOT NULL, -- ✅ FIX: Column name must be otp_code
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL, 
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+

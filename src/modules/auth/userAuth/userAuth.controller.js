@@ -1,7 +1,7 @@
 /**
  * src/modules/auth/userAuth/userAuth.controller.js - Final Controller
  * MANDATES: Handles Joi Validation, JWT Token Management, and delegates all DB/Business Logic to Service.
- * FIX: No duplicated imports, correctly maps Joi errors.
+ * FIXES: Robustness check for req.body, Joi TLD check enforced.
  */
 
 const jwt = require("jsonwebtoken");
@@ -43,7 +43,6 @@ async function register(req, res, next) {
       stripUnknown: true,
     });
 
-    // Service handles user creation, OTP generation, and email sending (db.tx)
     const { user, otp } = await service.registerUser(payload);
 
     return res.status(201).json({
@@ -67,7 +66,6 @@ async function verifyOtp(req, res, next) {
       stripUnknown: true,
     });
 
-    // Service handles OTP verification, user update, and OTP delete (db.tx)
     const updatedUser = await service.verifyOtp(payload);
 
     return res
@@ -80,26 +78,22 @@ async function verifyOtp(req, res, next) {
 }
 
 // =========================================================================
-// 3. LOGIN USER
+// 3. LOGIN USER (FINAL FIX: Robustness and OTP removal confirmed)
 // =========================================================================
 
 async function login(req, res, next) {
   try {
-    // ✅ FIX: req.body को सुरक्षित रूप से हैंडल करें।
-    // यदि req.body undefined है (body-parser विफल हुआ), तो Joi को एक खाली ऑब्जेक्ट {} दें।
+    // FIX 1: Body undefined होने से बचाने के लिए {} का उपयोग करें
     const body = req.body || {};
-
-    // Joi Validation (अब body ऑब्जेक्ट पर चलता है, undefined पर नहीं)
     const payload = await validation.loginSchema.validateAsync(body, {
       stripUnknown: true,
     });
 
+    // FIX 2: Service layer अब OTP नहीं भेजता, केवल authentication करता है।
     const { user, profile } = await service.loginUser(payload);
 
-    // JWT Creation (Controller's job)
     const token = jwt.sign(profile, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
-    // Set HTTP-Only Cookie
     const cookieOptions = createTokenCookieOptions();
     res.cookie(JWT_COOKIE_NAME, token, cookieOptions);
 
@@ -121,7 +115,7 @@ async function login(req, res, next) {
 async function forgotPassword(req, res, next) {
   try {
     const payload = await validation.forgotPasswordSchema.validateAsync(
-      req.body,
+      req.body || {},
       { stripUnknown: true }
     );
 
@@ -145,11 +139,10 @@ async function forgotPassword(req, res, next) {
 async function resetPassword(req, res, next) {
   try {
     const payload = await validation.resetPasswordSchema.validateAsync(
-      req.body,
+      req.body || {},
       { stripUnknown: true }
     );
 
-    // Service handles OTP verification, password hashing, user update, and OTP delete (db.tx)
     const updatedUser = await service.resetPassword(payload);
 
     return res
@@ -167,7 +160,6 @@ async function resetPassword(req, res, next) {
 
 async function logout(req, res, next) {
   try {
-    // Clear the HTTP-Only Cookie (Controller's responsibility)
     res.clearCookie(JWT_COOKIE_NAME, createTokenCookieOptions());
 
     return res.status(200).json({ message: "Logged out successfully." });

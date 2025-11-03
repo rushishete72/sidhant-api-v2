@@ -16,24 +16,24 @@ const {
   logout,
 } = require("./userAuth.controller");
 
-// Note: Assuming these routes are mounted under /api/v1/auth
+// Note: Assuming these routes are mounted under /api/v2/auth (as per server.js)
 
-// POST /api/v1/auth/register
+// POST /api/v2/auth/register
 router.post("/register", register);
 
-// POST /api/v1/auth/login
+// POST /api/v2/auth/login
 router.post("/login", login);
 
-// POST /api/v1/auth/verify-otp
+// POST /api/v2/auth/verify-otp
 router.post("/verify-otp", verifyOtp);
 
-// POST /api/v1/auth/forgot-password (Initiates OTP send)
+// POST /api/v2/auth/forgot-password (Initiates OTP send)
 router.post("/forgot-password", forgotPassword);
 
-// POST /api/v1/auth/reset-password
+// POST /api/v2/auth/reset-password
 router.post("/reset-password", resetPassword);
 
-// GET /api/v1/auth/logout
+// GET /api/v2/auth/logout
 router.get("/logout", logout);
 
 module.exports = router;

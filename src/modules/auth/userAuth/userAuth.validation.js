@@ -1,13 +1,12 @@
 /**
  * src/modules/auth/userAuth/userAuth.validation.js - Final Joi Schemas
- * MANDATE: All validation schemas defined here for Controller layer usage.
+ * FIX: Re-enables strict TLD checking for email validation.
  */
 
 const Joi = require("joi");
 
 // --- Reusable Schemas ---
 
-// OTP must be a 6-digit number string
 const otpSchema = Joi.string()
   .pattern(/^\d{6}$/)
   .required()
@@ -18,7 +17,11 @@ const otpSchema = Joi.string()
 
 const emailSchema = Joi.string()
   .trim()
-  .email({ tlds: { allow: false } })
+  .email({
+    tlds: {
+      allow: true, // ✅ FIX: Standard TLD rules are now enforced
+    },
+  })
   .max(100)
   .required()
   .messages({

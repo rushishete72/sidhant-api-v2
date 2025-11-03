@@ -1,6 +1,6 @@
 /**
- * src/modules/auth/userAuth/userAuth.model.js - Final Model Layer
- * MANDATES: Pure SQL queries, using 't' (transaction context) when applicable.
+ * src/modules/auth/userAuth/userAuth.model.js - Final Model Layer (Zero-Defect)
+ * MANDATES: Pure SQL, uses 't' object, and syncs OTP column name: otp_code.
  */
 
 const { db } = require("../../../../src/database/db");
@@ -13,17 +13,15 @@ const ROLE_TABLE = "master_roles";
 const OTP_TABLE = "user_otp";
 
 // =========================================================================
-// CUD Transaction Functions (Use t object or db if standalone)
+// CUD Transaction Functions
 // =========================================================================
 
 /** 1. सुनिश्चित करता है कि रोल मौजूद है और उसका ID लौटाता है। */
 const getOrCreateRole = async (t, roleName) => {
-  // 1. Insert/Conflict Check
   await t.none(
     `INSERT INTO ${ROLE_TABLE} (role_name) VALUES ($1) ON CONFLICT (role_name) DO NOTHING`,
     [roleName]
   );
-  // 2. Fetch role_id
   return t.one(`SELECT role_id FROM ${ROLE_TABLE} WHERE role_name = $1`, [
     roleName,
   ]);
@@ -39,9 +37,8 @@ const createUser = async (t, { email, full_name, role_id, password_hash }) => {
   return t.one(query, [email.trim(), full_name.trim(), role_id, password_hash]);
 };
 
-/** 3. OTP रिकॉर्ड बनाता है या अपडेट करता है। */
+/** 3. OTP रिकॉर्ड बनाता है या अपडेट करता है। (FINAL FIX: uses otp_code) */
 const createOtp = async (t, { user_id, otp_code, expires_at }) => {
-  // ✅ FIX: यहां otp_code लिया गया
   const context = t || db;
   const query = `
         INSERT INTO ${OTP_TABLE} (user_id, otp_code, expires_at, attempts) 
@@ -50,13 +47,12 @@ const createOtp = async (t, { user_id, otp_code, expires_at }) => {
         SET otp_code = EXCLUDED.otp_code, expires_at = EXCLUDED.expires_at, attempts = 0
         RETURNING *
     `;
-  return context.one(query, [user_id, otp_code, expires_at]); // ✅ FIX: यहां otp_code पास किया गया
+  return context.one(query, [user_id, otp_code, expires_at]);
 };
 
 /** 4. पासवर्ड को HASH करता है और DB में अपडेट करता है। */
 const updateUserPassword = async (t, user_id, newPassword) => {
   const context = t || db;
-  // Hashing is done in the Model for database insertion integrity
   const salt = await bcrypt.genSalt(10);
   const passwordHash = await bcrypt.hash(newPassword, salt);
 
@@ -108,14 +104,15 @@ const getUserByEmail = async (t, email) => {
   return context.oneOrNone(query, [email.trim()]);
 };
 
-/** 8. यूजर ID द्वारा OTP रिकॉर्ड Fetch करता है। */
+/** 8. यूजर ID द्वारा OTP रिकॉर्ड Fetch करता है। (FINAL FIX: SELECT otp_code AS otp_hash) */
 const getOtpByUserId = async (t, user_id) => {
   const context = t || db;
   const query = `
-        SELECT user_id, otp_code, expires_at, attempts
+        SELECT user_id, otp_code AS otp_hash, expires_at, attempts
         FROM ${OTP_TABLE}
         WHERE user_id = $1
     `;
+  // AS otp_hash का उपयोग Service Layer के bcrypt.compare() के साथ संगतता के लिए किया जाता है।
   return context.oneOrNone(query, [user_id]);
 };
 
