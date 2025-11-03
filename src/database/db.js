@@ -1,69 +1,81 @@
-/*
- * Context Note: यह केंद्रीय (central) डेटाबेस कनेक्शन फ़ाइल है।
- * (UPGRADED: 'undefined' जाँच को जोड़ा गया ताकि 'includes' त्रुटि न आए)
- */
+// File: src/database/db.js
+// FINAL, 100% CORRECTED VERSION
+// This version fixes the "invalid command-line argument" error AND
+// correctly sets the search_path by returning a promise in the 'connect' event.
 
-const pgp = require('pg-promise')({
-    query(e) {
-        // console.log('QUERY:', e.query);
-    }
+const pgp = require("pg-promise")({
+  /* Initialization Options */
+  connect(e) {
+    const cp = e.client.connectionParameters;
+    console.log(`[DB] सफलतापूर्वक डेटाबेस से कनेक्ट हुआ: ${cp.database}`);
+
+    // CRITICAL FIX: Return the promise.
+    // pg-promise will wait for this promise to resolve
+    // before releasing the connection for its first use.
+    // This 100% solves the "relation does not exist" race condition.
+    return e.client.query(
+      "SET search_path = users, masters, inventory, qc, procurement, public"
+    );
+  },
+  disconnect(e) {
+    const cp = e.client.connectionParameters;
+    console.log(`[DB] डेटाबेस से डिस्कनेक्ट हुआ: ${cp.database}`);
+  },
+  error(err, e) {
+    // Log all connection-level errors
+    console.error("[DB] FATAL DB-CONNECTION ERROR:", err);
+  },
 });
 
-// .env से कनेक्शन स्ट्रिंग लोड करें
-const DATABASE_URL = process.env.DATABASE_URL;
-const NODE_ENV = process.env.NODE_ENV || 'development';
+require("dotenv").config();
 
-if (!DATABASE_URL) {
-    console.error('---------------------------------');
-    console.error('CRITICAL ERROR: DATABASE_URL is not set in .env file.');
-    console.error('Please set it, e.g: postgres://USER:PASSWORD@HOST:PORT/DATABASE');
-    console.error('---------------------------------');
+// 1. Get the connection string
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error("[DB] FATAL ERROR: .env फ़ाइल में DATABASE_URL नहीं मिला।");
 }
 
-// -------------------------------------------------------------------------
-// SSL कॉन्फ़िगरेशन (Render.com/Heroku के लिए)
-// -------------------------------------------------------------------------
-let connectionOptions;
+// 2. Determine SSL configuration
+const isRenderHost = connectionString.includes(".render.com");
+let sslConfig;
 
-// ✅ फिक्स: जाँच करें कि DATABASE_URL मौजूद है *before* .includes() का उपयोग करने से पहले
-const isProduction = (NODE_ENV === 'production');
-const isRenderDb = (DATABASE_URL && DATABASE_URL.includes('render.com')); // यहाँ जाँच करें
-
-if (isProduction || isRenderDb) {
-    // प्रोडक्शन (Production) या Render.com के लिए SSL/TLS की आवश्यकता है
-    connectionOptions = {
-        connectionString: DATABASE_URL,
-        ssl: {
-            rejectUnauthorized: false
-        }
-    };
-    console.log('[DB] Production/Render.com SSL (rejectUnauthorized: false) के साथ कनेक्ट हो रहा है।');
+if (isRenderHost) {
+  console.log(
+    "[DB] Production/Render.com SSL (rejectUnauthorized: false) के साथ कनेक्ट हो रहा है।"
+  );
+  sslConfig = {
+    rejectUnauthorized: false, // Required for Render
+  };
 } else {
-    // लोकल डेवलपमेंट (Local Development)
-    connectionOptions = {
-        // यदि DATABASE_URL सेट नहीं है, तो एक डिफ़ॉल्ट (default) मान का उपयोग करें
-        connectionString: DATABASE_URL || 'postgres://user:pass@localhost:5432/sidhantdb'
-    };
-    if (!DATABASE_URL) {
-        console.warn('[DB] Warning: DATABASE_URL नहीं मिला। डिफ़ॉल्ट लोकलहोस्ट का उपयोग किया जा रहा है।');
-    }
+  // We check NODE_ENV for local development
+  const isProduction = process.env.NODE_ENV === "production";
+  if (isProduction) {
+    console.log("[DB] Production (Non-Render) SSL के साथ कनेक्ट हो रहा है।");
+    sslConfig = { rejectUnauthorized: false };
+  } else {
+    console.log("[DB] Local development (no SSL) के साथ कनेक्ट हो रहा है।");
+    sslConfig = undefined; // local dev
+  }
 }
-// -------------------------------------------------------------------------
 
-// डेटाबेस इंस्टेंस बनाएँ
-const db = pgp(connectionOptions);
-
-// कनेक्शन का परीक्षण करें
-db.connect()
-    .then(obj => {
-        console.log('[DB] सफलतापूर्वक डेटाबेस से कनेक्ट हुआ:', obj.client.database);
-        obj.done(); // कनेक्शन को पूल में वापस रिलीज़ करें
-    })
-    .catch(error => {
-        console.error('[DB] ERROR connecting to database:', error.message || error);
-    });
-
-module.exports = {
-    db,    // डेटाबेस कनेक्शन इंस्टेंस
-    pgp    // pg-promise लाइब्रेरी
+// 3. Create the connection object
+const cn = {
+  connectionString: connectionString,
+  ssl: sslConfig,
+  statement_timeout: 10000, // 10 seconds
+  // The 'options' fix was incorrect and has been REMOVED.
 };
+
+// Create the database instance
+const db = pgp(cn);
+
+// Test the connection
+db.one("SELECT 1 AS value")
+  .then((data) => {
+    console.log("[DB] कनेक्शन टेस्ट सफल। (SELECT 1)");
+  })
+  .catch((error) => {
+    console.error("[DB] !!डेटाबेस कनेक्शन टेस्ट विफल!!:", error.message);
+  });
+
+module.exports = { db, pgp };

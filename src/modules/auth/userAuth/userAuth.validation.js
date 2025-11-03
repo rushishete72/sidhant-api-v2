@@ -1,4 +1,5 @@
 // File: src/modules/auth/userAuth/userAuth.validation.js
+// FIXED: role_id has been removed from the registration schema.
 
 const Joi = require("joi");
 
@@ -13,11 +14,13 @@ const registerSchema = Joi.object({
   }),
   password: Joi.string().pattern(passwordRegex).required().messages({
     "string.pattern.base":
-      "Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character.",
+      "Password must be at least 8 chars and include uppercase, lowercase, number, and special char.",
     "any.required": "Password is required.",
   }),
   full_name: Joi.string().min(3).max(100).required(),
-  role_id: Joi.number().integer().positive().required(), // Assuming role_id must be provided during registration
+
+  // CRITICAL FIX: role_id has been removed.
+  // It should not be provided by the user during public registration.
 });
 
 const loginStep1Schema = Joi.object({

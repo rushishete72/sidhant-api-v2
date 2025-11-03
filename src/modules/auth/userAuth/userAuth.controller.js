@@ -1,7 +1,7 @@
 // File: src/modules/auth/userAuth/userAuth.controller.js
+// FIXED: Controller now only passes fields defined in the updated Joi schema.
 
 const UserAuthService = require("./userAuth.service");
-// asyncHandler must be used to wrap all controller functions to catch async errors
 const asyncHandler = require("../../../utils/asyncHandler");
 
 /**
@@ -9,7 +9,16 @@ const asyncHandler = require("../../../utils/asyncHandler");
  * POST /api/v2/auth/register
  */
 const register = asyncHandler(async (req, res) => {
-  const newUser = await UserAuthService.registerUser(req.body);
+  // CRITICAL FIX: Only destructure fields that are in the Joi schema.
+  // role_id is no longer accepted from the client.
+  const { email, password, full_name } = req.body;
+
+  // Pass only the validated fields to the service.
+  const newUser = await UserAuthService.registerUser({
+    email,
+    password,
+    full_name,
+  });
 
   res.status(201).json({
     success: true,
@@ -60,6 +69,7 @@ const loginStep2 = asyncHandler(async (req, res) => {
  * POST /api/v2/auth/logout
  */
 const logout = asyncHandler(async (req, res) => {
+  // req.user contains the decoded JWT payload from the auth middleware
   const result = await UserAuthService.logout(req.user);
 
   res.status(200).json({
@@ -104,7 +114,7 @@ module.exports = {
   register,
   loginStep1,
   loginStep2,
-  logout, // <<-- This is guaranteed to be a function
+  logout,
   forgotPasswordStep1,
   forgotPasswordStep2,
 };
