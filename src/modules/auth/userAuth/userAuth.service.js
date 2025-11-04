@@ -1,5 +1,5 @@
 // File: src/modules/auth/userAuth/userAuth.service.js
-// FINAL VERSION: Includes 2-Step Registration, 2-Step Login, and 2-Step Forgot Password.
+// FINAL VERSION: Includes 2-Step Registration, 2-Step Login, and 2-Step Forgot Password with STATEFUL SESSIONS.
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -11,18 +11,29 @@ const emailSender = require("../../../utils/emailSender");
 // CRITICAL SECURITY FIX:
 const DEFAULT_USER_ROLE_ID = 2; // 'Standard User'
 const JWT_SECRET =
-  process.env.JWT_SECRET || "your_super_secret_key_for_jwt_signing";
-const JWT_EXPIRES_IN = "1d";
+  process.env.JWT_SECRET || "your_secret_key_change_in_production";
+const JWT_EXPIRES_IN = "15m"; // ✅ ACCESS TOKEN: SHORT LIVED (15 minutes)
+const REFRESH_JWT_SECRET =
+  process.env.REFRESH_JWT_SECRET || "refresh_secret_change_me_in_env";
+const REFRESH_TOKEN_EXPIRES_IN = "7d"; // ✅ REFRESH TOKEN: LONG LIVED (7 days)
 const OTP_EXPIRY_MINUTES = 10;
 const SALT_ROUNDS = 10;
-const ADMIN_EMAIL = process.env.ADMIN_CRITICAL_EMAIL; // Use the admin email from .env
+const ADMIN_EMAIL = process.env.ADMIN_CRITICAL_EMAIL;
 
 // Helper to generate a 6-digit OTP
 const generateOTP = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
 
 const generateToken = (payload) => {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  // Access Token
+  const accessToken = jwt.sign(payload, JWT_SECRET, {
+    expiresIn: JWT_EXPIRES_IN,
+  });
+  // Refresh Token (Longer expiry)
+  const refreshToken = jwt.sign(payload, REFRESH_JWT_SECRET, {
+    expiresIn: REFRESH_TOKEN_EXPIRES_IN,
+  });
+  return { accessToken, refreshToken };
 };
 
 class UserAuthService {
@@ -35,39 +46,33 @@ class UserAuthService {
     const role_id = DEFAULT_USER_ROLE_ID;
 
     return await db.tx("register-user-step1-transaction", async (t) => {
-      // 1. Check for existing user (Security First)
       const existingUser = await UserAuthModel.findUserByEmail(email, t);
       if (existingUser) {
-        throw new CustomError("User already exists.", 409); // Use 409 Conflict
+        throw new CustomError("User already exists.", 409);
       }
 
-      // 2. Hash Password (Security First)
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-      // 3. Create User in master_users (is_verified: false by default)
       const newUser = await UserAuthModel.createUser(
         {
           email,
-          password_hash: hashedPassword, // Match column name
+          password_hash: hashedPassword, // CRITICAL: Ensure hash field is correct
           full_name,
           role_id,
         },
         t
       );
 
-      // 4. Generate and Store OTP (Security/Verification Mandate)
       const otp = generateOTP();
-      const otpExpiry = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000); // 10 minutes expiry
+      const otpExpiry = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000);
 
       await UserAuthModel.updateUserOtp(newUser.user_id, otp, otpExpiry, t);
 
-      // 5. Send OTP (REAL EMAIL SEND ACTIVATED)
       console.log(
         `[Auth Service] New Registration OTP for ${newUser.email} (User ID ${newUser.user_id}): ${otp}`
       );
       await emailSender.sendOtp(newUser.email, otp, "registration");
 
-      // 6. Return response with user_id for Step 2
       return {
         user_id: newUser.user_id,
         email: newUser.email,
@@ -79,7 +84,6 @@ class UserAuthService {
 
   /**
    * User registration - Step 2: Verify OTP and set is_verified = TRUE.
-   * CUD operation, requires mandatory db.tx for atomicity.
    */
   static async registerUser_Step2_VerifyOTPAndActivate(user_id, otp) {
     return await db.tx("register-user-step2-transaction", async (t) => {
@@ -88,19 +92,15 @@ class UserAuthService {
       if (!user) {
         throw new CustomError("User not found.", 404);
       }
-
       if (user.is_verified) {
         throw new CustomError(
           "User is already verified and active. Please proceed to login.",
           409
         );
       }
-
-      // 1. Check OTP and Expiry
       if (!user.otp_code || user.otp_code !== otp) {
         throw new CustomError("Invalid OTP.", 401);
       }
-
       if (user.otp_expiry < new Date()) {
         await UserAuthModel.clearUserOtp(user.user_id, t);
         throw new CustomError(
@@ -109,11 +109,9 @@ class UserAuthService {
         );
       }
 
-      // 2. Clear OTP and Verify User (Transactional Integrity)
       await UserAuthModel.clearUserOtp(user.user_id, t);
-      await UserAuthModel.verifyUser(user.user_id, t); // Set is_verified = TRUE
+      await UserAuthModel.verifyUser(user.user_id, t);
 
-      // 3. Send Admin Notification (MANDATED FOR ROLE ASSIGNMENT)
       console.log(
         `[Auth Service] Admin Alert: New User ${user.email} Verified. Role Assignment Required.`
       );
@@ -121,8 +119,6 @@ class UserAuthService {
       if (ADMIN_EMAIL) {
         const subject = "NEW USER VERIFIED & PENDING ROLE ASSIGNMENT";
         const message = `A new user has successfully verified their account:\n\nUser ID: ${user.user_id}\nEmail: ${user.email}\nName: ${user.full_name}\nStatus: Verified, Role Pending.\n\nPlease log into the Admin panel to review and assign a specific role.`;
-
-        // CRITICAL: Call the new Admin Notification function
         await emailSender.sendAdminNotification(subject, message);
       }
 
@@ -145,8 +141,6 @@ class UserAuthService {
       if (!user) {
         throw new CustomError("Invalid credentials.", 401);
       }
-
-      // CRITICAL SECURITY CHECK: Account must be verified
       if (!user.is_verified) {
         throw new CustomError(
           "Account is not yet verified. Please complete the registration verification step.",
@@ -168,7 +162,6 @@ class UserAuthService {
       console.log(
         `[Auth Service] Login OTP for ${user.email} (User ID ${user.user_id}): ${otp}`
       );
-
       await emailSender.sendOtp(user.email, otp, "login");
 
       return {
@@ -179,7 +172,7 @@ class UserAuthService {
   }
 
   /**
-   * Step 2 of Login (OTP verification and JWT generation)
+   * Step 2 of Login (OTP verification, JWT/Refresh Token generation, and Session save)
    */
   static async loginStep2_OTPverify_tokenGenerate(user_id, otp) {
     return await db.tx("login-step2-transaction", async (t) => {
@@ -188,11 +181,9 @@ class UserAuthService {
       if (!user) {
         throw new CustomError("User not found.", 404);
       }
-
       if (!user.otp_code || user.otp_code !== otp) {
         throw new CustomError("Invalid OTP.", 401);
       }
-
       if (user.otp_expiry < new Date()) {
         await UserAuthModel.clearUserOtp(user.user_id, t);
         throw new CustomError(
@@ -200,8 +191,6 @@ class UserAuthService {
           401
         );
       }
-
-      // CRITICAL SECURITY CHECK: Account must be verified
       if (!user.is_verified) {
         throw new CustomError(
           "Account is not verified. Verification needed to login.",
@@ -209,32 +198,57 @@ class UserAuthService {
         );
       }
 
+      // 1. Clear OTP and Update Last Login
       await UserAuthModel.clearUserOtp(user.user_id, t);
+      await UserAuthModel.updateLastLogin(user.user_id, t);
 
+      // 2. Generate Tokens
       const tokenPayload = {
         user_id: user.user_id,
         email: user.email,
         role_id: user.role_id,
         role_name: user.role_name,
       };
-      const token = generateToken(tokenPayload);
+      const { accessToken, refreshToken } = generateToken(tokenPayload);
 
-      await UserAuthModel.updateLastLogin(user.user_id, t);
+      // 3. CRITICAL: Save Refresh Token to DB (Stateful Security)
+      const refreshExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days from now
+      await UserAuthModel.createSession(
+        user.user_id,
+        refreshToken,
+        refreshExpiry,
+        t
+      );
 
       return {
-        token,
+        token: accessToken,
+        refreshToken: refreshToken,
         user: tokenPayload,
-        message: "Login successful. JWT token generated.",
+        message: "Login successful. Tokens generated.",
       };
     });
   }
 
   /**
-   * Logout (Future use for token/session management)
+   * Logout (CRITICAL: Refresh Token Invalidation using db.tx)
    */
-  static async logout(authPayload) {
-    console.log(`User ID ${authPayload.user_id} logged out.`);
-    return { message: "Logout successful." };
+  static async logout(refreshToken) {
+    return await db.tx("logout-transaction", async (t) => {
+      // 1. CRITICAL: Delete the Refresh Token from the database (Invalidates the session)
+      const deleted = await UserAuthModel.deleteSessionByToken(refreshToken, t);
+
+      if (!deleted) {
+        // Return success even if not found to avoid user enumeration,
+        // but here we throw to confirm the token sent was expected.
+        throw new CustomError(
+          "Logout failed: Session token invalid or not found.",
+          404
+        );
+      }
+
+      console.log(`[Auth Service] Refresh Token invalidated successfully.`);
+      return { message: "Logout successful. Session invalidated." };
+    });
   }
 
   /**
@@ -246,7 +260,6 @@ class UserAuthService {
       const user = await UserAuthModel.findUserByEmail(email, t);
 
       if (!user) {
-        // SECURITY FIX: Generic message to prevent email enumeration
         return {
           message:
             "If a matching account was found, a password reset code has been sent.",
@@ -258,11 +271,9 @@ class UserAuthService {
 
       await UserAuthModel.updateUserOtp(user.user_id, otp, otpExpiry, t);
 
-      // Send OTP Email (ACTIVATE REAL EMAIL SEND)
       console.log(
         `[Auth Service] Forgot Password OTP for ${user.email}: ${otp}`
       );
-
       await emailSender.sendOtp(user.email, otp, "reset");
 
       return {
@@ -282,11 +293,9 @@ class UserAuthService {
       if (!user) {
         throw new CustomError("Invalid request details.", 400);
       }
-
       if (!user.otp_code || user.otp_code !== otp) {
         throw new CustomError("Invalid or expired reset code.", 401);
       }
-
       if (user.otp_expiry < new Date()) {
         await UserAuthModel.clearUserOtp(user.user_id, t);
         throw new CustomError("Reset code expired.", 401);
