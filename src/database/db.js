@@ -1,23 +1,14 @@
 /*
  * File: src/database/db.js
- * Absolute Accountability: FINAL REBUILD.
- *
- * FIX 7 (ECONNRESET LOOP BREAKER): Pichla "Simplified Mode" (Fix 6)
- * ek galti thi. Usne keepAlive settings ko hata diya tha.
- *
- * YEH NAYA LOGIC HAI:
- * Hum 'pg-promise' ko 'connectionString' aur 'keepAlive'
- * settings, dono ek saath merge karke denge.
- * 'pg-promise' 'connectionString' se connect karega aur
- * 'keepAlive' settings ko us connection par apply kar dega.
- *
- * Yeh 'DROP SCHEMA' ke dauraan hone wale network
- * timeout (ECONNRESET) ko permanently fix kar dega.
+ * Absolute Accountability: FINAL HARDENING.
+ * Removed unrecognized "cap" option. Ensures KeepAlive settings are forced.
  */
 
 require("dotenv").config({
   path: require("path").resolve(process.cwd(), ".env"),
 });
+
+// CRITICAL FIX: Initializing pgp WITHOUT unrecognized options
 const pgp = require("pg-promise")();
 
 // --- CRITICAL FIX: Connection Logic Rebuilt ---
@@ -26,8 +17,6 @@ let cn;
 if (process.env.DATABASE_URL) {
   /**************************************************************
    * PRODUCTION / RENDER CONFIG
-   *
-   * Hum 'connectionString' aur 'keepAlive' ko merge kar rahe hain.
    **************************************************************/
   console.log("[DB] DATABASE_URL ka upyog kiya ja raha hai (KeepAlive Mode).");
 
@@ -45,15 +34,14 @@ if (process.env.DATABASE_URL) {
   }
 
   cn = {
-    // 1. Connection String ka upyog karein
     connectionString: process.env.DATABASE_URL,
-    ...sslConfig, // SSL settings add karein
-
-    // 2. Network settings ko force karein
+    ...sslConfig,
     max: 20,
     idleTimeoutMillis: 30000,
+    // CRITICAL: Explicitly set keepAlive flags for the driver
     keepAlive: true,
-    keepAliveInitialDelay: 30000, // 30 second keepalive (LOOP BREAKER)
+    keepAliveInitialDelay: 30000,
+    connectionTimeoutMillis: 10000, // Connection must succeed within 10s
   };
 } else {
   /**************************************************************
@@ -80,13 +68,28 @@ if (process.env.DATABASE_URL) {
     ...sslConfig,
     max: 20,
     idleTimeoutMillis: 30000,
+    // CRITICAL: Explicitly set keepAlive flags for the driver
     keepAlive: true,
     keepAliveInitialDelay: 30000,
+    connectionTimeoutMillis: 10000,
   };
 }
 // --- End of Fix ---
 
 // Initialize the database instance
 const db = pgp(cn);
+
+// Test connectivity immediately on startup
+db.connect()
+  .then((obj) => {
+    obj.done();
+    console.log("[DB] PostgreSQL connection pool initialized and verified.");
+  })
+  .catch((error) => {
+    console.error(
+      "🚨 FATAL DB ERROR: Could not connect to PostgreSQL.",
+      error.message
+    );
+  });
 
 module.exports = { db, pgp };

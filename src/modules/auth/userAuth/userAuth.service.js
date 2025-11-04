@@ -45,34 +45,58 @@ class UserAuthService {
     const { email, password, full_name } = userData;
     const role_id = DEFAULT_USER_ROLE_ID;
 
+    // The entire flow is now wrapped in db.tx for atomicity.
     return await db.tx("register-user-step1-transaction", async (t) => {
+      // 1. Check for existing user (Security First)
       const existingUser = await UserAuthModel.findUserByEmail(email, t);
       if (existingUser) {
         throw new CustomError("User already exists.", 409);
       }
 
+      // 2. Create User in master_users (is_verified: false by default)
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
+      // Note: We use an explicit object with password_hash for clarity
       const newUser = await UserAuthModel.createUser(
         {
           email,
-          password_hash: hashedPassword, // CRITICAL: Ensure hash field is correct
+          password_hash: hashedPassword,
           full_name,
           role_id,
         },
         t
       );
 
+      // 3. Generate and Store OTP
       const otp = generateOTP();
       const otpExpiry = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000);
 
       await UserAuthModel.updateUserOtp(newUser.user_id, otp, otpExpiry, t);
 
+      // 4. CRITICAL: Send OTP (If this fails due to invalid recipient,
+      // the entire transaction must rollback)
       console.log(
         `[Auth Service] New Registration OTP for ${newUser.email} (User ID ${newUser.user_id}): ${otp}`
       );
-      await emailSender.sendOtp(newUser.email, otp, "registration");
 
+      try {
+        await emailSender.sendOtp(newUser.email, otp, "registration");
+      } catch (emailError) {
+        // If Nodemailer throws an error (e.g., recipient address rejected),
+        // we throw a specific error, which will automatically trigger db.tx rollback.
+        console.error(
+          `[CRITICAL ROLLBACK] Email send failed for ${newUser.email}:`,
+          emailError.message
+        );
+        throw new CustomError(
+          "Registration failed: The provided email address appears invalid or unreachable.",
+          400,
+          // Optionally pass a sanitized detail:
+          { emailServiceError: "Recipient rejected or connection issue." }
+        );
+      }
+
+      // 5. Return success
       return {
         user_id: newUser.user_id,
         email: newUser.email,

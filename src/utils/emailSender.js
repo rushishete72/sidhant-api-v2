@@ -122,6 +122,10 @@ const sendOtp = async (toEmail, otpCode, type = "registration") => {
       "Email service failed to send OTP. Check server logs for details.",
       503
     );
+    // throw new CustomError(
+    //   "Email service failed to send OTP. Check server logs for details.",
+    //   503
+    // );
   }
 };
 

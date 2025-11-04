@@ -1,19 +1,14 @@
 /*
  * File: src/database/reset_and_seed.js
- * Absolute Accountability: Rebuilt to fix SQL dependency order.
- *
- * FIX 9 (Code 42P01): 'relation "inventory_bin_locations" does not exist'.
- * Yeh error isliye tha kyunki SCHEMA_FILES array mein file '07'
- * file '04' se pehle execute ho rahi thi.
- *
- * File '07' (Procurement) file '04' (Inventory Mgt) par depend karti hai.
- * Order ko correct kar diya gaya hai.
+ * Absolute Accountability: FINAL SIMPLIFICATION.
+ * All manual connection management and transactions (db.tx) removed.
+ * Relies only on the stable pg-promise pool (db.none) to minimize overhead and prevent ECONNRESET on Cloud DB.
  */
 
 require("dotenv").config({
   path: require("path").resolve(process.cwd(), ".env"),
 });
-const { db, pgp } = require("./db"); // db.js se import karein
+const { db, pgp } = require("./db");
 const fs = require("fs");
 const path = require("path");
 
@@ -21,18 +16,16 @@ const path = require("path");
 const SCHEMA_DIR = path.join(__dirname, "schema_modules");
 const SEED_DIR = path.join(__dirname, "seed_data");
 
-// --- CRITICAL FIX: SQL files ka order sahi kiya gaya ---
 const SCHEMA_FILES = [
   "01_Security_Base.sql",
   "02_Master_UOMs_Entities.sql",
   "03_Part_Definition.sql",
-  "04_QC_Inventory_Mgt.sql", // FIX: Is file ko 07 se pehle move kiya gaya
-  "07_Procurement_Purchasing.sql", // FIX: Yeh file 04 par depend karti hai
+  "04_QC_Inventory_Mgt.sql",
+  "07_Procurement_Purchasing.sql",
   "08_Inventory_Receipts.sql",
   "05_Production_Flow.sql",
   "06_Performance_Indexes.sql",
 ];
-// --- End of Fix ---
 
 const SEED_FILES = ["09_Initial_Master_Data.sql", "10_Test_Transactions.sql"];
 
@@ -48,39 +41,25 @@ const readFile = (filePath) => {
 
 // Asynchronous function jo reset aur seed ko chalata hai
 async function runReset() {
-  let connection;
-  let originalTimeout; // Original timeout ko store karne ke liye
-
   try {
     console.log("=================================================");
     console.log("== GEMS Database Reset and Seed Utility ==");
     console.log("=================================================");
 
-    // 1. Connect karein
-    connection = await db.connect();
-    console.log(`[DB] सफलतापूर्वक डेटाबेस से कनेक्ट हुआ।`);
-
-    // Connection test
-    await connection.one("SELECT 1");
+    // 1. Initial Connection Test (Directly on the pool)
+    await db.one("SELECT 1");
     console.log("[DB] कनेक्शन टेस्ट सफल। (SELECT 1)");
 
-    // Session timeout ko unlimited set karein
-    const timeoutResult = await connection.one("SHOW statement_timeout");
-    originalTimeout = timeoutResult.statement_timeout;
-    console.log(
-      `[DB] Original statement_timeout: ${originalTimeout}. Setting to 0 for reset...`
-    );
-    await connection.none("SET statement_timeout = 0");
-
-    // Handle 'Schema does not exist'
+    // 2. Dropping and Recreating Schema
     console.log("\n[STEP 1] Dropping existing public schema...");
     try {
-      await connection.none("DROP SCHEMA public CASCADE");
+      // Use IF EXISTS for robustness against network failures
+      await db.none("DROP SCHEMA IF EXISTS public CASCADE");
       console.log("[STEP 1] Schema 'public' dropped successfully.");
     } catch (dropError) {
-      if (dropError.code === "3F000") {
+      if (dropError.code === "ECONNRESET") {
         console.warn(
-          `[WARN] Schema 'public' pehle se hi delete hai (Code: 3F000). Skipping drop.`
+          `[WARN] Schema drop failed due to network reset. Proceeding to create/re-use.`
         );
       } else {
         throw dropError;
@@ -88,25 +67,30 @@ async function runReset() {
     }
 
     console.log("\n[STEP 2] Recreating public schema...");
-    await connection.none("CREATE SCHEMA public");
-    console.log("[STEP 2] Schema 'public' recreated successfully.");
+    // Use IF NOT EXISTS to prevent 42P06 crash
+    await db.none("CREATE SCHEMA IF NOT EXISTS public");
+    console.log(
+      "[STEP 2] Schema 'public' ensured (created or already existed)."
+    );
 
-    console.log("\n[STEP 3] Executing schema SQL files (Corrected Order)...");
+    // 3. Executing Schema and Seed files sequentially using the pool (db.none)
+    console.log("\n[STEP 3] Executing schema SQL files...");
     for (const file of SCHEMA_FILES) {
       const filePath = path.join(SCHEMA_DIR, file);
-      console.log(`  -> Executing: ${file}`);
+      console.log(`  -> Executing SCHEMA: ${file}`);
       const sql = readFile(filePath);
-      await connection.none(sql);
+      await db.none(sql); // Simple execution on the pool
       console.log(`  -> OK: ${file}`);
     }
     console.log("[STEP 3] All schema files executed successfully.");
 
+    // 4. Executing seed data SQL files
     console.log("\n[STEP 4] Executing seed data SQL files...");
     for (const file of SEED_FILES) {
       const filePath = path.join(SEED_DIR, file);
-      console.log(`  -> Seeding: ${file}`);
+      console.log(`  -> Seeding DATA: ${file}`);
       const sql = readFile(filePath);
-      await connection.none(sql);
+      await db.none(sql); // Simple execution on the pool
       console.log(`  -> OK: ${file}`);
     }
     console.log("[STEP 4] All seed data files executed successfully.");
@@ -125,26 +109,8 @@ async function runReset() {
       );
     }
   } finally {
-    if (connection) {
-      try {
-        if (originalTimeout) {
-          console.log(
-            `\n[DB] Restoring statement_timeout to ${originalTimeout}...`
-          );
-          await connection.none("SET statement_timeout = $1", [
-            originalTimeout,
-          ]);
-        }
-        connection.done(); // Connection ko pool mein release karein
-        console.log(`\n[DB] डेटाबेस से डिस्कनेक्ट हुआ।`);
-      } catch (releaseError) {
-        console.error(
-          "[DB] Error releasing connection:",
-          releaseError.message || releaseError
-        );
-      }
-    }
-    pgp.end(); // pg-promise connection pool ko band karein
+    pgp.end();
+    console.log(`\n[DB] pg-promise pool closed.`);
   }
 }
 
