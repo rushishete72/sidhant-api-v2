@@ -1,4 +1,5 @@
 // File: src/modules/auth/userAuth/userAuth.route.js
+// FINAL VERSION: All routes defined with correct imports.
 
 const express = require("express");
 const router = express.Router();
@@ -12,9 +13,7 @@ const {
   forgotPasswordStep2,
 } = require("./userAuth.controller");
 
-// CRITICAL FIX: Ensure the middleware is imported as 'validate', not 'validation'.
-// The utils file exports it as 'validate'.
-const { validate } = require("../../../utils/validation");
+const validate = require("../../../utils/validation"); // <-- FIX: Import the default export directly
 const { authenticate } = require("../../../middleware/auth");
 
 const {
@@ -26,7 +25,6 @@ const {
 } = require("./userAuth.validation");
 
 // --- Public Routes ---
-// CORRECT USAGE: validate(schema) is a function call returning the middleware.
 router.post("/register", validate(registerSchema), register);
 router.post("/login/step1", validate(loginStep1Schema), loginStep1);
 router.post("/login/step2", validate(loginStep2Schema), loginStep2);

@@ -1,18 +1,16 @@
 // File: src/modules/auth/userAuth/userAuth.controller.js
-// FIXED: Controller now only passes fields defined in the updated Joi schema.
+// FINAL VERSION: Includes register, login step 1, login step 2, and forgot password step 1.
 
 const UserAuthService = require("./userAuth.service");
-const asyncHandler = require("../../../utils/asyncHandler");
+const asyncHandler = require("../../../utils/asyncHandler"); // Requires the critical fix from last step
 
 /**
  * Register a new user
  * POST /api/v2/auth/register
  */
 const register = asyncHandler(async (req, res) => {
-  // CRITICAL FIX: Only destructure fields that are in the Joi schema.
   const { email, password, full_name } = req.body;
 
-  // Pass only the validated fields to the service.
   const newUser = await UserAuthService.registerUser({
     email,
     password,
@@ -50,6 +48,7 @@ const loginStep1 = asyncHandler(async (req, res) => {
  */
 const loginStep2 = asyncHandler(async (req, res) => {
   const { user_id, otp } = req.body;
+
   const result = await UserAuthService.loginStep2_OTPverify_tokenGenerate(
     user_id,
     otp
@@ -68,7 +67,6 @@ const loginStep2 = asyncHandler(async (req, res) => {
  * POST /api/v2/auth/logout
  */
 const logout = asyncHandler(async (req, res) => {
-  // req.user contains the decoded JWT payload from the auth middleware
   const result = await UserAuthService.logout(req.user);
 
   res.status(200).json({
@@ -82,12 +80,12 @@ const logout = asyncHandler(async (req, res) => {
  * POST /api/v2/auth/forgot-password/step1
  */
 const forgotPasswordStep1 = asyncHandler(async (req, res) => {
-  const { email } = req.body;
-  const result = await UserAuthService.forgotPassword_sendOTP(email);
+  const { email } = req.body; // Safely extracted from validated body
+  const result = await UserAuthService.forgotPassword_sendOTP(email); // Security is handled in the service
 
   res.status(200).json({
     success: true,
-    message: result.message,
+    message: result.message, // CRITICAL: Generic success message is returned
   });
 });
 
@@ -96,12 +94,11 @@ const forgotPasswordStep1 = asyncHandler(async (req, res) => {
  * POST /api/v2/auth/forgot-password/step2
  */
 const forgotPasswordStep2 = asyncHandler(async (req, res) => {
-  // CRITICAL FIX: Ensure req.body field matches the Service function signature (newPassword was used previously)
-  const { email, otp, newPassword } = req.body;
+  const { email, otp, new_password } = req.body;
   const result = await UserAuthService.resetPassword_verifyOTP_updatePassword(
     email,
     otp,
-    newPassword
+    new_password
   );
 
   res.status(200).json({

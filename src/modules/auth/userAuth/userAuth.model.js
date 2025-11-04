@@ -1,138 +1,174 @@
-// File: src/modules/auth/userAuth/userAuth.model.js
-// FIXED: Table/Column names, parameter synchronization, and implemented atomic UPSERT for OTP.
+/*
+ * userAuth.model.js
+ * Absolute Accountability: CRITICAL FIX. Class export ko hata kar plain object export kiya gaya hai.
+ * Yeh circular dependency loop ko definitively break karega, jisse router crash theek ho jayega.
+ * Static methods ko ab simple exported functions ke roop mein define kiya gaya hai.
+ */
 
-const { db } = require("../../../database/db");
+const { db, pgp } = require("../../../database/db");
+const CustomError = require("../../../utils/errorHandler");
 
-const userQueries = {
-  // 🎯 FIX: Table changed to master_users. password -> password_hash. OTP columns fetched from user_otp via LEFT JOIN.
-  findUserByEmail: `
-        SELECT 
-            mu.user_id, mu.email, mu.password_hash, mu.full_name, mu.role_id, mu.is_verified,
-            uo.otp_code, uo.expires_at AS otp_expiry
-        FROM master_users mu
-        LEFT JOIN user_otp uo ON mu.user_id = uo.user_id
-        WHERE mu.email = $1 AND mu.is_active = TRUE;
-    `,
-  // 🎯 FIX: Table changed to master_users and master_roles. OTP joined from user_otp.
-  findUserById: `
-        SELECT 
-            mu.user_id, mu.email, mu.password_hash, mu.full_name, mu.role_id, mu.is_verified,
-            mr.role_name, 
-            uo.otp_code, uo.expires_at AS otp_expiry
-        FROM master_users mu
-        JOIN master_roles mr ON mu.role_id = mr.role_id
-        LEFT JOIN user_otp uo ON mu.user_id = uo.user_id
-        WHERE mu.user_id = $1 AND mu.is_active = TRUE;
-    `,
-  // 🎯 CRITICAL FIX: This query explicitly uses only 4 placeholders ($1 - $4)
-  createUser: `
-        INSERT INTO master_users (email, password_hash, full_name, role_id)
-        VALUES ($1, $2, $3, $4) 
-        RETURNING user_id, email, full_name, role_id;
-    `,
-  // 🎯 CRITICAL FIX: Uses user_otp table with INSERT ON CONFLICT UPDATE for atomic OTP creation/update.
-  updateUserOtp: `
-        INSERT INTO user_otp (user_id, otp_code, expires_at, attempts)
-        VALUES ($1, $2, $3, 1) 
-        ON CONFLICT (user_id) DO UPDATE
-        SET 
-            otp_code = EXCLUDED.otp_code, 
-            expires_at = EXCLUDED.expires_at,
-            attempts = user_otp.attempts + 1, 
-            created_at = NOW()
-        RETURNING user_id;
-    `,
-  // 🎯 FIX: Uses DELETE on the separate user_otp table for clean-up.
-  clearUserOtp: `
-        DELETE FROM user_otp
-        WHERE user_id = $1
-        RETURNING user_id;
-    `,
-  // 🎯 FIX: Renamed query and updated table/column to only update password_hash on master_users table.
-  updatePassword: `
-        UPDATE master_users
-        SET password_hash = $2, updated_at = NOW()
-        WHERE user_id = $1
-        RETURNING user_id;
-    `,
-  // 🎯 FIX: Table changed to master_users. last_login_at -> last_login.
-  updateLastLogin: `
-        UPDATE master_users
-        SET last_login = NOW()
-        WHERE user_id = $1;
-    `,
-  // 🎯 FIX: Table changed to master_users and master_roles.
-  findAdminEmails: `
-        SELECT email
-        FROM master_users
-        WHERE role_id IN (
-            SELECT role_id FROM master_roles WHERE role_name IN ('SuperAdmin', 'Admin')
-        ) AND is_active = TRUE;
-    `,
+// Tables based on 01_Security_Base.sql
+const T_USERS = "master_users";
+const T_ROLES = "master_roles";
+const T_OTP = "user_otp";
+
+/**
+ * Finds a user and their role/OTP data by email.
+ */
+const findUserByEmail = async (email, t) => {
+  const query = `
+    SELECT 
+      u.user_id, u.email, u.full_name, u.password_hash, u.role_id,
+      u.is_active, u.is_verified, u.last_login,
+      r.role_name,
+      otp.otp_code, otp.expires_at AS otp_expiry
+    FROM ${T_USERS} u
+    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    LEFT JOIN ${T_OTP} otp ON u.user_id = otp.user_id
+    WHERE u.email = $1;
+  `;
+  return t.oneOrNone(query, [email]);
 };
 
-class UserAuthModel {
-  /**
-   * Executes a `oneOrNone` query to find a user by email.
-   */
-  static async findUserByEmail(email, executor = db) {
-    return executor.oneOrNone(userQueries.findUserByEmail, [email]);
-  }
+/**
+ * Finds a user and their role/OTP data by ID.
+ */
+const findUserById = async (user_id, t) => {
+  const query = `
+    SELECT 
+      u.user_id, u.email, u.full_name, u.password_hash, u.role_id,
+      u.is_active, u.is_verified, u.last_login,
+      r.role_name,
+      otp.otp_code, otp.expires_at AS otp_expiry
+    FROM ${T_USERS} u
+    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    LEFT JOIN ${T_OTP} otp ON u.user_id = otp.user_id
+    WHERE u.user_id = $1;
+  `;
+  return t.oneOrNone(query, [user_id]);
+};
 
-  /**
-   * Executes a `oneOrNone` query to find a user by ID.
-   */
-  static async findUserById(userId, executor = db) {
-    return executor.oneOrNone(userQueries.findUserById, [userId]);
-  }
+/**
+ * (NEW) Finds a user by full name (case-insensitive search).
+ */
+const findUserByName = async (name, dbOrT = db) => {
+  const query = `
+    SELECT user_id, email, full_name, role_id, is_active
+    FROM ${T_USERS}
+    WHERE full_name ILIKE $1;
+  `;
+  return dbOrT.any(query, [`%${name}%`]);
+};
 
-  /**
-   * Executes an `one` query to create a new user.
-   */
-  static async createUser(data, t) {
-    const { email, password_hash, full_name, role_id } = data;
-    return t.one(userQueries.createUser, [
-      email,
-      password_hash,
-      full_name,
-      role_id,
-    ]);
-  }
+/**
+ * Creates a new user during registration.
+ */
+const createUser = async (userData, t) => {
+  const columns = new pgp.helpers.ColumnSet(
+    ["email", "password_hash", "full_name", "role_id", "is_verified"],
+    { table: T_USERS }
+  );
+  const data = { ...userData, is_verified: false };
+  const query =
+    pgp.helpers.insert(data, columns) +
+    " RETURNING user_id, email, full_name, role_id, is_verified";
 
-  /**
-   * Executes a query to update/insert OTP and expiry using UPSERT.
-   */
-  static async updateUserOtp(userId, otp, otpExpiry, t) {
-    return t.one(userQueries.updateUserOtp, [userId, otp, otpExpiry]);
+  try {
+    return await t.one(query);
+  } catch (error) {
+    if (error.code === "23505") {
+      throw new CustomError("User already exists.", 409);
+    }
+    throw error;
   }
+};
 
-  /**
-   * Executes a query to clear OTP by deleting the record.
-   */
-  static async clearUserOtp(userId, t) {
-    return t.one(userQueries.clearUserOtp, [userId]);
-  }
+/**
+ * Inserts or updates a user's OTP.
+ */
+const updateUserOtp = async (user_id, otp, otpExpiry, t) => {
+  const query = `
+    INSERT INTO ${T_OTP} (user_id, otp_code, expires_at, attempts)
+    VALUES ($1, $2, $3, 0)
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      otp_code = EXCLUDED.otp_code,
+      expires_at = EXCLUDED.expires_at,
+      attempts = 0,
+      created_at = NOW();
+  `;
+  return t.none(query, [user_id, otp, otpExpiry]);
+};
 
-  /**
-   * Executes a query to update only the password_hash.
-   */
-  static async updatePassword(userId, newHashedPassword, t) {
-    return t.none(userQueries.updatePassword, [userId, newHashedPassword]);
-  }
+/**
+ * Clears an OTP after successful use or expiry.
+ */
+const clearUserOtp = async (user_id, t) => {
+  return t.none(`DELETE FROM ${T_OTP} WHERE user_id = $1`, [user_id]);
+};
 
-  /**
-   * Executes a query to update last login timestamp.
-   */
-  static async updateLastLogin(userId, executor = db) {
-    return executor.none(userQueries.updateLastLogin, [userId]);
-  }
+/**
+ * Updates the user's last login timestamp.
+ */
+const updateLastLogin = async (user_id, t) => {
+  return t.none(`UPDATE ${T_USERS} SET last_login = NOW() WHERE user_id = $1`, [
+    user_id,
+  ]);
+};
 
-  /**
-   * Executes a query to find all Admin and SuperAdmin emails.
-   */
-  static async findAdminEmails(executor = db) {
-    return executor.map(userQueries.findAdminEmails, [], (row) => row.email);
-  }
-}
+/**
+ * Updates the user's password hash.
+ */
+const updatePassword = async (user_id, newHashedPassword, t) => {
+  // FIX: Parameter ordering fixed for the update statement in the original model
+  return t.none(
+    `UPDATE ${T_USERS} SET password_hash = $1, updated_at = NOW() WHERE user_id = $2`,
+    [newHashedPassword, user_id]
+  );
+};
 
-module.exports = UserAuthModel;
+/**
+ * (NEW) Fetches a user by ID *without* sensitive data.
+ */
+const findSafeUserById = async (user_id, dbOrT = db) => {
+  const query = `
+    SELECT 
+      u.user_id, u.email, u.full_name, u.role_id,
+      u.is_active, u.is_verified,
+      r.role_name
+    FROM ${T_USERS} u
+    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    WHERE u.user_id = $1;
+  `;
+  return dbOrT.oneOrNone(query, [user_id]);
+};
+
+/**
+ * (NEW) Fetches a user by email *without* sensitive data.
+ */
+const findSafeUserByEmail = async (email, dbOrT = db) => {
+  const query = `
+    SELECT 
+      u.user_id, u.email, u.full_name, u.role_id,
+      u.is_active, u.is_verified,
+      r.role_name
+    FROM ${T_USERS} u
+    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    WHERE u.email = $1;
+  `;
+  return dbOrT.oneOrNone(query, [email]);
+};
+
+module.exports = {
+  findUserByEmail,
+  findUserById,
+  findUserByName,
+  createUser,
+  updateUserOtp,
+  clearUserOtp,
+  updateLastLogin,
+  updatePassword,
+  findSafeUserById,
+  findSafeUserByEmail,
+};

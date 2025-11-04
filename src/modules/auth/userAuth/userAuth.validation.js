@@ -1,5 +1,5 @@
 // File: src/modules/auth/userAuth/userAuth.validation.js
-// FIX: Complete, verified schema definitions to prevent 'undefined' error during module loading.
+// FINAL VERSION: Includes register, login step 1, login step 2, and forgot password step 1 schemas.
 
 const Joi = require("joi");
 
@@ -40,7 +40,7 @@ const loginStep2Schema = Joi.object({
 });
 
 const forgotPasswordStep1Schema = Joi.object({
-  email: Joi.string().email().required().lowercase().trim(),
+  email: Joi.string().email().required().lowercase().trim(), // Only requires a valid email
 });
 
 const forgotPasswordStep2Schema = Joi.object({

@@ -1,21 +1,13 @@
-// File: src/utils/asyncHandler.js (Target: sidhant-api-v2)
+// File: src/utils/asyncHandler.js
+// CRITICAL FIX: Ensures async controllers handle errors and resolve to standard Express handlers.
 
 /**
- * @function asyncHandler
- * @description
- * A high-order function (HOF) wrapper for Express route handlers (Controllers)
- * to automatically catch exceptions from asynchronous functions and pass them
- * to the global error handling middleware via next(err).
- * * This is CRITICAL for preventing unhandled promise rejections (500 errors)
- * and ensures all errors flow into our structured errorHandler.js for logging
- * and safe client response.
- * * @param {function} fn - The asynchronous Express controller function (req, res, next).
- * @returns {function} - The wrapped function ready for use in Express routes.
+ * Global wrapper for async express route handlers.
+ * Catches errors and passes them to Express error middleware (errorHandler).
+ * @param {function} fn - The async function (controller) to wrap.
  */
 const asyncHandler = (fn) => (req, res, next) => {
-  // Execute the controller function (fn). Since it's often 'async', it returns a Promise.
-  // We explicitly call .catch(next) on the promise chain.
-  // If the promise rejects (due to 'throw' or a fatal error), 'next(err)' is called.
+  // Use Promise.resolve().catch(next) to safely wrap the async function
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
