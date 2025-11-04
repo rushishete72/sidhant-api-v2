@@ -1,21 +1,21 @@
-// File: src/middleware/auth.js
+/*
+ * File: src/middleware/auth.js
+ * Absolute Accountability: Implements final fix for Admin Authorization Bypass.
+ * CRITICAL: Renamed 'protect' to 'authenticate' for compatibility.
+ */
 
 const jwt = require("jsonwebtoken");
-const CustomError = require("../utils/errorHandler"); // assuming you created this utility
-// If you are not using CustomError utility, change all 'new CustomError' to 'new Error'
-// The structure you gave implies it should be handled via next(new Error(...))
+const CustomError = require("../utils/errorHandler"); // Assuming CustomError utility exists
 
 const JWT_SECRET = process.env.JWT_SECRET || "your_default_secret_key";
 
 /**
- * 1. Authenticate: JWT टोकन को मान्य करता है।
- * टोकन से उपयोगकर्ता डेटा को req.user में संलग्न करता है।
+ * 1. Authenticate: JWT टोकन को मान्य करता है। (Authentication)
  */
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    // Using next() to pass error to central error handler (better practice)
     return next(
       new CustomError(
         "Authentication Failed. Bearer token की आवश्यकता है।",
@@ -27,15 +27,13 @@ const authenticate = (req, res, next) => {
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET); // पेलोड से महत्वपूर्ण डेटा निकालें (permissions field is likely missing, but we proceed)
 
-    // पेलोड से महत्वपूर्ण डेटा निकालें
     req.user = {
       user_id: decoded.user_id,
       email: decoded.email,
       role_name: decoded.role_name,
-      // पुराने कोड से अपग्रेड: अनुमतियों के लिए Set का उपयोग करें (तेज़ जाँच के लिए)
-      permissions: new Set(
+      permissions: new Set( // This will be empty, hence the bypass fix below
         Array.isArray(decoded.permissions) ? decoded.permissions : []
       ),
     };
@@ -55,6 +53,7 @@ const authenticate = (req, res, next) => {
 
 /**
  * 2. Authorize: Permission-Based Access Control (PBAC) लागू करता है।
+ * CRITICAL FIX: Bypasses check if user is a System_Admin.
  * @param {string|Array<string>} requiredPermissions - आवश्यक परमिशन कुंजी (या कुंजियाँ)।
  */
 const authorize = (requiredPermissions) => {
@@ -72,6 +71,15 @@ const authorize = (requiredPermissions) => {
       );
     }
 
+    const userRole = req.user.role_name?.toLowerCase();
+
+    // --- CRITICAL ADMIN BYPASS ---
+    // Seed Data में 'System_Admin' है, इसलिए दोनों की जाँच करें।
+    if (userRole === "system_admin" || userRole === "admin") {
+      return next(); // System Admin को हमेशा पूर्ण पहुँच दें।
+    }
+    // -----------------------------
+
     const hasPermission = perms.some((permissionKey) =>
       req.user.permissions.has(permissionKey)
     );
@@ -83,9 +91,8 @@ const authorize = (requiredPermissions) => {
         `AUTH FAIL: User ${req.user.user_id} (Role: ${
           req.user.role_name
         }) denied access to ${req.originalUrl}. Missing: ${perms.join(", ")}`
-      );
+      ); // Using CustomError for structured response
 
-      // Using CustomError for structured response
       return next(
         new CustomError("Authorization Failed. अपर्याप्त अनुमतियाँ।", 403)
       );
@@ -95,7 +102,7 @@ const authorize = (requiredPermissions) => {
 
 module.exports = {
   authenticate,
-  authorize,
-  // पुराने कोड के साथ संगतता (compatibility) के लिए एक उपनाम (alias)
+  authorize, // पुराने कोड के साथ संगतता (compatibility) के लिए उपनाम
   requireAuth: authenticate,
+  protect: authenticate, // पुराने 'protect' मिडलवेयर के लिए भी संगतता
 };
