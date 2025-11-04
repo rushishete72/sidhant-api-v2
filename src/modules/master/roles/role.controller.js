@@ -1,182 +1,162 @@
-/*
- * Context Note: यह 'roles' और 'permissions' के लिए HTTP अनुरोधों को संभालता है।
- * यह मॉडल को business logic से जोड़ता है।
- */
+// File: src/modules/master/roles/role.controller.js
 
-// निर्भरताएँ (Dependencies)
-const roleModel = require('./role.model'); // (इसे हम अगले चरण में बनाएँगे)
-const { APIError } = require('../../../utils/errorHandler'); 
-const { tr } = require('../../../utils/validation'); 
+const asyncHandler = require("../../../utils/asyncHandler");
+const APIError = require("../../../utils/errorHandler"); // CustomError क्लास
+const roleService = require("./role.service");
+const {
+  createRoleSchema,
+  updateRoleSchema,
+  updateRolePermissionsSchema,
+} = require("./role.validation");
 
-// --- Core Helper Functions ---
+// =========================================================================
+// SYNCHRONOUS VALIDATION UTILITY (Controller Logic)
+// =========================================================================
+const syncValidateSchema = (schema, data) => {
+  if (!schema || typeof schema.validate !== "function") {
+    throw new APIError("Internal Validation Schema Missing.", 500, [
+      "Developer Error: Validation schema not passed or is invalid.",
+    ]);
+  }
 
-/** URL से प्राप्त ID को मान्य (Validate) करता है। */
-const handleIdValidation = (id, paramName = 'ID') => {
-    const parsedId = parseInt(id, 10);
-    if (isNaN(parsedId) || parsedId <= 0) {
-        return { error: `अमान्य (Invalid) ${paramName} URL में प्रदान किया गया है।` };
-    }
-    return { id: parsedId };
+  const options = {
+    abortEarly: false,
+    allowUnknown: true,
+    stripUnknown: true,
+  };
+
+  const { error, value } = schema.validate(data, options);
+
+  if (error) {
+    const errors = error.details.map((detail) => detail.message);
+    throw new APIError("Validation Failed", 400, errors);
+  }
+  return value; // Validated data return करें
 };
 
 // =========================================================================
-// A. ROLES CRUD CONTROLLERS
+// CONTROLLER FUNCTIONS
 // =========================================================================
 
-/** 1. सभी भूमिकाओं (Roles) और उनकी अनुमतियों (Permissions) को प्राप्त करता है। */
-const getAllRoles = async (req, res, next) => {
-    try {
-        const page = parseInt(req.query.page, 10) || 1;
-        const limit = parseInt(req.query.limit, 10) || 25;
-        const offset = (page - 1) * limit;
+/** 1. GET /: Get All Roles and their Permissions */
+const getAllRoles = asyncHandler(async (req, res) => {
+  const { limit = 10, page = 1 } = req.query;
+  const result = await roleService.getAllRoles({
+    limit: parseInt(limit),
+    page: parseInt(page),
+  });
+  res.status(200).json({
+    message: "Roles fetched successfully.",
+    data: result.data,
+    total_count: result.total_count,
+  });
+});
 
-        const { data: roles, total_count } = await roleModel.getAllRoles({ limit, offset });
-        
-        const totalPages = Math.ceil(total_count / limit);
+/** 2. POST /: Create New Role */
+const createRole = asyncHandler(async (req, res) => {
+  // 1. Validation
+  const data = syncValidateSchema(createRoleSchema, req.body);
 
-        return res.status(200).json({ 
-            message: 'All Roles retrieved successfully.', 
-            pagination: {
-                total_records: total_count, total_pages: totalPages,
-                current_page: page, limit: limit,
-            },
-            data: roles 
-        });
-    } catch (error) {
-        return next(error); 
-    }
-};
+  // 2. Service Call
+  const newRole = await roleService.createRole(data);
 
-/** 2. एक नई भूमिका (Role) बनाता है। */
-const createRole = async (req, res, next) => {
-    const { role_name } = req.body;
+  // 3. Response
+  res.status(201).json({
+    message: `Role '${newRole.role_name}' created successfully.`,
+    data: newRole,
+  });
+});
 
-    if (!role_name || tr(role_name).length < 3) {
-        return next(new APIError('Role Name is required and must be at least 3 characters long.', 400));
-    }
-    
-    try {
-        const newRole = await roleModel.createRole({ role_name: tr(role_name) });
+/** 3. GET /:roleId: Get Role by ID */
+const getRoleById = asyncHandler(async (req, res) => {
+  const roleId = parseInt(req.params.roleId);
+  if (isNaN(roleId) || roleId <= 0) {
+    return res.status(400).json({ message: "Invalid Role ID provided." });
+  }
 
-        return res.status(201).json({ 
-            message: `भूमिका '${newRole.role_name}' सफलतापूर्वक बन गई।`, 
-            data: newRole 
-        });
-    } catch (error) {
-        if (error.code === '23505') { // Unique constraint violation (role_name)
-            error.status = 409; 
-            error.message = 'यह भूमिका नाम (Role Name) पहले से मौजूद है।';
-        }
-        return next(error); 
-    }
-};
+  const role = await roleService.getRoleById(roleId);
+  if (!role) {
+    return res
+      .status(404)
+      .json({ message: `Role with ID ${roleId} not found.` });
+  }
+  res.status(200).json({
+    message: "Role details fetched successfully.",
+    data: role,
+  });
+});
 
-/** 3. ID द्वारा भूमिका को प्राप्त करता है। */
-const getRoleById = async (req, res, next) => {
-    const { error, id: roleId } = handleIdValidation(req.params.roleId, 'Role ID');
-    if (error) return next(new APIError(error, 400)); 
+/** 4. PUT /:roleId: Update Role Name/Description */
+const updateRole = asyncHandler(async (req, res) => {
+  const roleId = parseInt(req.params.roleId);
+  if (isNaN(roleId) || roleId <= 0) {
+    return res.status(400).json({ message: "Invalid Role ID provided." });
+  }
 
-    try {
-        const role = await roleModel.getRoleById(roleId);
-        
-        if (!role) return next(new APIError(`भूमिका ID ${roleId} नहीं मिली।`, 404)); 
-        return res.status(200).json({ data: role });
-    } catch (error) {
-        return next(error); 
-    }
-};
+  // 1. Validation
+  const data = syncValidateSchema(updateRoleSchema, req.body);
 
-/** 4. भूमिका का नाम/विवरण (Name/Description) अपडेट करता है। */
-const updateRole = async (req, res, next) => {
-    const { error, id: roleId } = handleIdValidation(req.params.roleId, 'Role ID');
-    if (error) return next(new APIError(error, 400)); 
+  // 2. Service Call
+  const updatedRole = await roleService.updateRole(roleId, data);
 
-    const { role_name } = req.body;
+  // 3. Response
+  if (!updatedRole) {
+    return res.status(404).json({
+      message: `Role with ID ${roleId} not found or no change applied.`,
+    });
+  }
+  res.status(200).json({
+    message: "Role updated successfully.",
+    data: updatedRole,
+  });
+});
 
-    if (!role_name || tr(role_name).length < 3) {
-        return next(new APIError('Role Name is required and must be at least 3 characters long for update.', 400));
-    }
-    
-    try {
-        const updatedRole = await roleModel.updateRole(roleId, { role_name: tr(role_name) });
+/** 5. GET /permissions/all: Get All Available Permissions */
+const getAllPermissions = asyncHandler(async (req, res) => {
+  const permissions = await roleService.getAllPermissions();
+  res.status(200).json({
+    message: "All available permissions fetched successfully.",
+    data: permissions,
+  });
+});
 
-        if (!updatedRole) return next(new APIError(`भूमिका ID ${roleId} नहीं मिली।`, 404)); 
-        
-        return res.status(200).json({ 
-            message: `भूमिका '${updatedRole.role_name}' सफलतापूर्वक अपडेट हुई।`, 
-            data: updatedRole 
-        });
-    } catch (error) {
-        if (error.code === '23505') {
-            error.status = 409; 
-            error.message = 'अपडेट विफल: यह भूमिका नाम (Role Name) पहले से मौजूद है।';
-        }
-        return next(error); 
-    }
-};
+/** 6. PATCH /permissions/:roleId: Assign/Revoke Permissions */
+const updateRolePermissions = asyncHandler(async (req, res) => {
+  const roleId = parseInt(req.params.roleId);
+  if (isNaN(roleId) || roleId <= 0) {
+    return res.status(400).json({ message: "Invalid Role ID provided." });
+  }
 
-// =========================================================================
-// B. PERMISSIONS CONTROLLERS
-// =========================================================================
+  // 1. Validation
+  const { permissionKeys } = syncValidateSchema(
+    updateRolePermissionsSchema,
+    req.body
+  );
 
-/** 5. सभी उपलब्ध अनुमतियों (Permissions) को प्राप्त करता है। */
-const getAllPermissions = async (req, res, next) => {
-    try {
-        const permissions = await roleModel.getAllPermissions();
-        
-        return res.status(200).json({ 
-            message: 'All available permissions retrieved successfully.', 
-            data: permissions 
-        });
-    } catch (error) {
-        return next(error); 
-    }
-};
+  // 2. Service Call
+  const updatedRole = await roleService.updateRolePermissions(
+    roleId,
+    permissionKeys
+  );
 
+  // 3. Response
+  if (!updatedRole) {
+    return res.status(404).json({
+      message: `Role with ID ${roleId} not found for permission assignment.`,
+    });
+  }
 
-/** 6. भूमिका के लिए अनुमतियों को असाइन/रद्द (Assign/Revoke) करता है। */
-const updateRolePermissions = async (req, res, next) => {
-    const { error, id: roleId } = handleIdValidation(req.params.roleId, 'Role ID');
-    if (error) return next(new APIError(error, 400)); 
-
-    const { permission_keys } = req.body;
-
-    // सुनिश्चित करें कि permission_keys एक गैर-शून्य ऐरे (non-null array) है
-    if (!Array.isArray(permission_keys)) {
-        return next(new APIError('permission_keys must be an array of strings.', 400));
-    }
-
-    try {
-        // मॉडल को कॉल करें जो पुराने अनुमतियों को हटा देगा और नए को जोड़ देगा (ट्रांजैक्शन में)
-        const updatedRole = await roleModel.updateRolePermissions(roleId, permission_keys);
-        
-        if (!updatedRole) {
-            return next(new APIError(`भूमिका ID ${roleId} नहीं मिली।`, 404)); 
-        }
-
-        return res.status(200).json({
-            message: `भूमिका '${updatedRole.role_name}' के लिए अनुमतियाँ सफलतापूर्वक अपडेट हुईं।`,
-            data: updatedRole,
-        });
-
-    } catch (error) {
-        if (error.code === '23503') { // Foreign Key Violation (यदि कोई अमान्य परमिशन कुंजी (key) प्रदान की गई है)
-            error.status = 400; 
-            error.message = 'अमान्य अनुमति कुंजी (Permission Key) प्रदान की गई है।';
-        }
-        return next(error);
-    }
-};
-
-// =========================================================================
-// FINAL EXPORTS
-// =========================================================================
+  res.status(200).json({
+    message: `Permissions successfully assigned/updated for role ID ${roleId}.`,
+    data: updatedRole,
+  });
+});
 
 module.exports = {
-    getAllRoles,
-    createRole,
-    getRoleById,
-    updateRole,
-    getAllPermissions,
-    updateRolePermissions,
+  getAllRoles,
+  getRoleById,
+  createRole,
+  updateRole,
+  getAllPermissions,
+  updateRolePermissions,
 };
