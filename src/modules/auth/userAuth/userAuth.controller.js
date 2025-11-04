@@ -1,34 +1,48 @@
 // File: src/modules/auth/userAuth/userAuth.controller.js
-// FINAL VERSION: Includes register, login step 1, login step 2, and forgot password step 1.
 
+const asyncHandler = require("../../../utils/asyncHandler");
 const UserAuthService = require("./userAuth.service");
-const asyncHandler = require("../../../utils/asyncHandler"); // Requires the critical fix from last step
 
-/**
- * Register a new user
- * POST /api/v2/auth/register
- */
-const register = asyncHandler(async (req, res) => {
-  const { email, password, full_name } = req.body;
+// Controller for Registration Step 1: Create Account & Send OTP
+const registerUser = asyncHandler(async (req, res) => {
+  const newUser = await UserAuthService.registerUser_Step1_CreateAndSendOTP(
+    req.body
+  );
 
-  const newUser = await UserAuthService.registerUser({
-    email,
-    password,
-    full_name,
-  });
-
+  // Send a 201 Created response
   res.status(201).json({
     success: true,
-    message: "User registered successfully. Welcome!",
-    data: newUser,
+    status: "success",
+    message: newUser.message,
+    data: {
+      user_id: newUser.user_id, // Return ID to facilitate Step 2
+      email: newUser.email,
+    },
   });
 });
 
-/**
- * Step 1: Login - Password Check and OTP Send
- * POST /api/v2/auth/login/step1
- */
-const loginStep1 = asyncHandler(async (req, res) => {
+// Controller for Registration Step 2: Verify OTP and Activate User
+const verifyRegistrationOTP = asyncHandler(async (req, res) => {
+  const { user_id, otp } = req.body;
+
+  const result = await UserAuthService.registerUser_Step2_VerifyOTPAndActivate(
+    user_id,
+    otp
+  );
+
+  res.status(200).json({
+    success: true,
+    status: "success",
+    message: result.message,
+    data: {
+      user_id: result.user_id,
+      email: result.email,
+    },
+  });
+});
+
+// Existing Controller for Login Step 1: Password Check and Send Login OTP
+const loginStep1_passwordCheck_OTPsend = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const result = await UserAuthService.loginStep1_passwordCheck_OTPsend(
     email,
@@ -37,18 +51,15 @@ const loginStep1 = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
-    user_id: result.user_id,
+    data: { user_id: result.user_id },
   });
 });
 
-/**
- * Step 2: Login - OTP Verify and JWT Token Generate
- * POST /api/v2/auth/login/step2
- */
-const loginStep2 = asyncHandler(async (req, res) => {
+// Existing Controller for Login Step 2: OTP Verification and Token Generation
+const loginStep2_OTPverify_tokenGenerate = asyncHandler(async (req, res) => {
   const { user_id, otp } = req.body;
-
   const result = await UserAuthService.loginStep2_OTPverify_tokenGenerate(
     user_id,
     otp
@@ -56,62 +67,50 @@ const loginStep2 = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
-    token: result.token,
-    user: result.user,
+    data: {
+      token: result.token,
+      user: result.user,
+    },
   });
 });
 
-/**
- * Logout
- * POST /api/v2/auth/logout
- */
-const logout = asyncHandler(async (req, res) => {
-  const result = await UserAuthService.logout(req.user);
+// Existing Controller for Forgot Password Step 1
+const forgotPassword_sendOTP = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  const result = await UserAuthService.forgotPassword_sendOTP(email);
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
   });
 });
 
-/**
- * Forgot Password - Step 1: Send OTP
- * POST /api/v2/auth/forgot-password/step1
- */
-const forgotPasswordStep1 = asyncHandler(async (req, res) => {
-  const { email } = req.body; // Safely extracted from validated body
-  const result = await UserAuthService.forgotPassword_sendOTP(email); // Security is handled in the service
+// Existing Controller for Forgot Password Step 2
+const resetPassword_verifyOTP_updatePassword = asyncHandler(
+  async (req, res) => {
+    const { email, otp, new_password } = req.body;
+    const result = await UserAuthService.resetPassword_verifyOTP_updatePassword(
+      email,
+      otp,
+      new_password
+    );
 
-  res.status(200).json({
-    success: true,
-    message: result.message, // CRITICAL: Generic success message is returned
-  });
-});
-
-/**
- * Reset Password - Step 2: Verify OTP and Update Password
- * POST /api/v2/auth/forgot-password/step2
- */
-const forgotPasswordStep2 = asyncHandler(async (req, res) => {
-  const { email, otp, new_password } = req.body;
-  const result = await UserAuthService.resetPassword_verifyOTP_updatePassword(
-    email,
-    otp,
-    new_password
-  );
-
-  res.status(200).json({
-    success: true,
-    message: result.message,
-  });
-});
+    res.status(200).json({
+      success: true,
+      status: "success",
+      message: result.message,
+    });
+  }
+);
 
 module.exports = {
-  register,
-  loginStep1,
-  loginStep2,
-  logout,
-  forgotPasswordStep1,
-  forgotPasswordStep2,
+  registerUser,
+  verifyRegistrationOTP,
+  loginStep1_passwordCheck_OTPsend,
+  loginStep2_OTPverify_tokenGenerate,
+  forgotPassword_sendOTP,
+  resetPassword_verifyOTP_updatePassword,
 };

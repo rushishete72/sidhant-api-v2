@@ -1,45 +1,60 @@
 // File: src/modules/auth/userAuth/userAuth.route.js
-// FINAL VERSION: All routes defined with correct imports.
 
 const express = require("express");
 const router = express.Router();
-
+const validate = require("../../../utils/validation"); // assuming validate is exported directly
+const authController = require("./userAuth.controller");
 const {
-  register,
-  loginStep1,
-  loginStep2,
-  logout,
-  forgotPasswordStep1,
-  forgotPasswordStep2,
-} = require("./userAuth.controller");
-
-const validate = require("../../../utils/validation"); // <-- FIX: Import the default export directly
-const { authenticate } = require("../../../middleware/auth");
-
-const {
-  registerSchema,
+  registerSchema, // CRITICAL: This MUST be correctly imported from validation.js
+  registrationOtpSchema,
   loginStep1Schema,
   loginStep2Schema,
   forgotPasswordStep1Schema,
   forgotPasswordStep2Schema,
 } = require("./userAuth.validation");
+// const { protect } = require("../../../middleware/auth"); // Assuming middleware/auth.js exists
 
-// --- Public Routes ---
-router.post("/register", validate(registerSchema), register);
-router.post("/login/step1", validate(loginStep1Schema), loginStep1);
-router.post("/login/step2", validate(loginStep2Schema), loginStep2);
+// --- PUBLIC ROUTES (No Auth Required) ---
+
+// 1. User Registration - Step 1: Create Account and Send OTP
+router.post("/register", validate(registerSchema), authController.registerUser);
+
+// 2. User Registration - Step 2: Verify OTP and Activate User (Completes Registration)
+router.post(
+  "/verify-registration-otp",
+  validate(registrationOtpSchema),
+  authController.verifyRegistrationOTP
+);
+
+// 3. User Login - Step 1: Password Check and Send Login OTP
+router.post(
+  "/login/step1",
+  validate(loginStep1Schema),
+  authController.loginStep1_passwordCheck_OTPsend
+);
+
+// 4. User Login - Step 2: OTP Verification and Token Generation
+router.post(
+  "/login/step2",
+  validate(loginStep2Schema),
+  authController.loginStep2_OTPverify_tokenGenerate
+);
+
+// 5. Forgot Password - Step 1: Send Reset OTP
 router.post(
   "/forgot-password/step1",
   validate(forgotPasswordStep1Schema),
-  forgotPasswordStep1
+  authController.forgotPassword_sendOTP
 );
+
+// 6. Forgot Password - Step 2: Verify OTP and Reset Password
 router.post(
   "/forgot-password/step2",
   validate(forgotPasswordStep2Schema),
-  forgotPasswordStep2
+  authController.resetPassword_verifyOTP_updatePassword
 );
 
-// --- Protected Routes ---
-router.post("/logout", authenticate, logout);
+// --- AUTH REQUIRED ROUTES (Placeholder) ---
+router.get("/logout", protect, authController.logout);
 
 module.exports = router;

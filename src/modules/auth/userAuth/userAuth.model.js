@@ -1,8 +1,6 @@
 /*
  * userAuth.model.js
- * Absolute Accountability: CRITICAL FIX. Class export ko hata kar plain object export kiya gaya hai.
- * Yeh circular dependency loop ko definitively break karega, jisse router crash theek ho jayega.
- * Static methods ko ab simple exported functions ke roop mein define kiya gaya hai.
+ * Absolute Accountability: CRITICAL FIX. Added verifyUser and updatePasswordAndClearOtp to support 2-step flows.
  */
 
 const { db, pgp } = require("../../../database/db");
@@ -24,7 +22,7 @@ const findUserByEmail = async (email, t) => {
       r.role_name,
       otp.otp_code, otp.expires_at AS otp_expiry
     FROM ${T_USERS} u
-    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    LEFT JOIN ${T_ROLES} r ON u.role_id = r.role_id
     LEFT JOIN ${T_OTP} otp ON u.user_id = otp.user_id
     WHERE u.email = $1;
   `;
@@ -42,7 +40,7 @@ const findUserById = async (user_id, t) => {
       r.role_name,
       otp.otp_code, otp.expires_at AS otp_expiry
     FROM ${T_USERS} u
-    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    LEFT JOIN ${T_ROLES} r ON u.role_id = r.role_id
     LEFT JOIN ${T_OTP} otp ON u.user_id = otp.user_id
     WHERE u.user_id = $1;
   `;
@@ -65,13 +63,9 @@ const findUserByName = async (name, dbOrT = db) => {
  * Creates a new user during registration.
  */
 const createUser = async (userData, t) => {
-  const columns = new pgp.helpers.ColumnSet(
-    ["email", "password_hash", "full_name", "role_id", "is_verified"],
-    { table: T_USERS }
-  );
-  const data = { ...userData, is_verified: false };
+  // Use pgp.helpers.insert safely
   const query =
-    pgp.helpers.insert(data, columns) +
+    pgp.helpers.insert(userData, null, T_USERS) +
     " RETURNING user_id, email, full_name, role_id, is_verified";
 
   try {
@@ -121,12 +115,36 @@ const updateLastLogin = async (user_id, t) => {
  * Updates the user's password hash.
  */
 const updatePassword = async (user_id, newHashedPassword, t) => {
-  // FIX: Parameter ordering fixed for the update statement in the original model
   return t.none(
     `UPDATE ${T_USERS} SET password_hash = $1, updated_at = NOW() WHERE user_id = $2`,
     [newHashedPassword, user_id]
   );
 };
+
+// *************** NEW FUNCTION FOR REGISTER FLOW ***************
+/**
+ * Sets is_verified to TRUE for a user (Used for registration completion).
+ */
+const verifyUser = async (user_id, t) => {
+  return t.none(
+    `UPDATE ${T_USERS} SET is_verified = TRUE, updated_at = NOW() WHERE user_id = $1`,
+    [user_id]
+  );
+};
+// ***************************************************************
+
+// *************** NEW FUNCTION TO FIX SERVICE INCONSISTENCY ***************
+/**
+ * Updates the user's password and clears the OTP (Used for Forgot Password Step 2).
+ */
+const updatePasswordAndClearOtp = async (user_id, newHashedPassword, t) => {
+  await t.none(
+    `UPDATE ${T_USERS} SET password_hash = $1, updated_at = NOW() WHERE user_id = $2`,
+    [newHashedPassword, user_id]
+  );
+  await t.none(`DELETE FROM ${T_OTP} WHERE user_id = $1`, [user_id]);
+};
+// *************************************************************************
 
 /**
  * (NEW) Fetches a user by ID *without* sensitive data.
@@ -138,7 +156,7 @@ const findSafeUserById = async (user_id, dbOrT = db) => {
       u.is_active, u.is_verified,
       r.role_name
     FROM ${T_USERS} u
-    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    LEFT JOIN ${T_ROLES} r ON u.role_id = r.role_id
     WHERE u.user_id = $1;
   `;
   return dbOrT.oneOrNone(query, [user_id]);
@@ -154,7 +172,7 @@ const findSafeUserByEmail = async (email, dbOrT = db) => {
       u.is_active, u.is_verified,
       r.role_name
     FROM ${T_USERS} u
-    JOIN ${T_ROLES} r ON u.role_id = r.role_id
+    LEFT JOIN ${T_ROLES} r ON u.role_id = r.role_id
     WHERE u.email = $1;
   `;
   return dbOrT.oneOrNone(query, [email]);
@@ -169,6 +187,8 @@ module.exports = {
   clearUserOtp,
   updateLastLogin,
   updatePassword,
+  verifyUser,
+  updatePasswordAndClearOtp,
   findSafeUserById,
   findSafeUserByEmail,
 };

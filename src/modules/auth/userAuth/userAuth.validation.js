@@ -1,7 +1,7 @@
 // File: src/modules/auth/userAuth/userAuth.validation.js
-// FINAL VERSION: Includes register, login step 1, login step 2, and forgot password step 1 schemas.
+// FINAL VERSION: Includes register, verify OTP, login steps, and forgot password steps.
 
-const Joi = require("joi");
+const Joi = require("joi"); // CRITICAL: This must be installed (npm install joi) and imported successfully.
 
 // Common password regex for security: Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char
 const passwordRegex =
@@ -18,6 +18,21 @@ const registerSchema = Joi.object({
     "any.required": "Password is required.",
   }),
   full_name: Joi.string().min(3).max(100).required(),
+});
+
+// NEW SCHEMA for Registration OTP Verification
+const registrationOtpSchema = Joi.object({
+  user_id: Joi.number().integer().positive().required().messages({
+    "any.required": "User ID is required from the first registration step.",
+  }),
+  otp: Joi.string()
+    .length(6)
+    .pattern(/^[0-9]+$/)
+    .required()
+    .messages({
+      "string.length": "OTP must be 6 digits.",
+      "string.pattern.base": "OTP must be numerical.",
+    }),
 });
 
 const loginStep1Schema = Joi.object({
@@ -54,6 +69,7 @@ const forgotPasswordStep2Schema = Joi.object({
 
 module.exports = {
   registerSchema,
+  registrationOtpSchema,
   loginStep1Schema,
   loginStep2Schema,
   forgotPasswordStep1Schema,
