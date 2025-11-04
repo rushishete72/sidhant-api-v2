@@ -1,87 +1,53 @@
-/*
- * File: src/modules/master/users/user.validation.js
- * Module: Admin User Management (Validation Schemas)
- * Absolute Accountability: Defines schemas for Admin CRUD operations.
- */
+// File: src/modules/master/users/user.validation.js
 
 const Joi = require("joi");
 
-// Common password regex for security: Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char
-const passwordRegex =
-  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-
 // =========================================================================
-// 1. POST / Create New User (Admin Panel)
+// VALIDATION SCHEMAS
 // =========================================================================
 
+/**
+ * 1. POST / (Create New User) के लिए Body Validation
+ */
 const createUserSchema = Joi.object({
-  email: Joi.string().email().required().lowercase().trim().messages({
-    "string.email": "Email must be a valid email address.",
-    "any.required": "Email is required.",
-  }),
-  password: Joi.string().pattern(passwordRegex).required().messages({
-    "string.pattern.base":
-      "Password must be at least 8 chars and include uppercase, lowercase, number, and special char.",
-    "any.required": "Password is required.",
-  }),
-  full_name: Joi.string().min(3).max(100).required(),
-  role_id: Joi.number().integer().positive().required().messages({
-    "any.required": "Role ID is required for a new user.",
-  }),
-  // is_active/is_verified are handled by the service layer (default TRUE)
+  full_name: Joi.string().min(2).max(100).required().label("Full Name"),
+  email: Joi.string().email().max(100).required().label("Email"),
+  password: Joi.string().min(8).max(255).required().label("Password"),
+  role_id: Joi.number() // Admin Panel द्वारा role_id असाइन करना आवश्यक है
+    .integer()
+    .positive()
+    .required()
+    .label("Role ID"),
 });
 
-// =========================================================================
-// 2. PUT/PATCH /:userId - General User Detail Update
-// =========================================================================
-
+/**
+ * 2. PUT /:userId (Update User Details) के लिए Body Validation
+ */
 const updateUserSchema = Joi.object({
-  // Only non-auth details are allowed in this generic update route
-  full_name: Joi.string().min(3).max(100).optional(),
-  email: Joi.string().email().lowercase().trim().optional(),
+  full_name: Joi.string().min(2).max(100).optional().label("Full Name"),
+  is_active: Joi.boolean().optional().label("Is Active Status"),
+  is_verified: Joi.boolean().optional().label("Is Verified Status"),
 })
-  // CRITICAL: Ensure at least one field is provided
   .min(1)
-  .messages({
-    "object.min":
-      "At least one field (full_name or email) must be provided for update.",
-  });
+  .label("Update User Data");
 
-// =========================================================================
-// 3. PATCH /role/:userId - Change Role
-// =========================================================================
-
-const changeRoleSchema = Joi.object({
-  role_id: Joi.number().integer().positive().required().messages({
-    "any.required": "Role ID is required to change user role.",
-    "number.positive": "Role ID must be positive.",
-  }),
+/**
+ * 3. PATCH /role/:userId (Change User Role) के लिए Body Validation
+ */
+const changeUserRoleSchema = Joi.object({
+  role_id: Joi.number().integer().positive().required().label("Role ID"),
 });
 
-// =========================================================================
-// 4. PATCH /password/reset/:userId - Reset Password
-// =========================================================================
-
-const resetPasswordSchema = Joi.object({
-  newPassword: Joi.string().pattern(passwordRegex).required().messages({
-    "string.pattern.base":
-      "New password must be at least 8 chars and include uppercase, lowercase, number, and special char.",
-    "any.required": "New password is required.",
-  }),
-});
-
-// =========================================================================
-// 5. Parameter Validation (For :userId in routes)
-// =========================================================================
-
-const userIdSchema = Joi.object({
-  userId: Joi.number().integer().positive().required(),
+/**
+ * 4. PATCH /password/:userId (Reset User Password) के लिए Body Validation
+ */
+const resetUserPasswordSchema = Joi.object({
+  new_password: Joi.string().min(8).max(255).required().label("New Password"),
 });
 
 module.exports = {
   createUserSchema,
   updateUserSchema,
-  changeRoleSchema,
-  resetPasswordSchema,
-  userIdSchema,
+  changeUserRoleSchema,
+  resetUserPasswordSchema,
 };

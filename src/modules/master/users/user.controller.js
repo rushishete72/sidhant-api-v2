@@ -1,165 +1,182 @@
 // File: src/modules/master/users/user.controller.js
-// FINAL VERSION: Rewritten to use asyncHandler and UserService.
 
 const asyncHandler = require("../../../utils/asyncHandler");
-const UserService = require("./user.service");
-const CustomError = require("../../../utils/errorHandler");
+const APIError = require("../../../utils/errorHandler");
+const userService = require("./user.service");
+const {
+  createUserSchema,
+  updateUserSchema,
+  changeUserRoleSchema,
+  resetUserPasswordSchema,
+} = require("./user.validation");
 
-// Helper function to simplify ID validation and ensure integer type
-const handleIdValidation = (id, paramName = "ID") => {
-  const parsedId = parseInt(id, 10);
-  if (isNaN(parsedId) || parsedId <= 0) {
-    throw new CustomError(
-      `अमान्य (Invalid) ${paramName} URL में प्रदान किया गया है।`,
-      400
-    );
+// [NOTE]: Reusing the syncValidateSchema helper defined in role.controller.js
+const syncValidateSchema = (schema, data) => {
+  if (!schema || typeof schema.validate !== "function") {
+    throw new APIError("Internal Validation Schema Missing.", 500);
   }
-  return parsedId;
+  const options = { abortEarly: false, allowUnknown: true, stripUnknown: true };
+  const { error, value } = schema.validate(data, options);
+  if (error) {
+    const errors = error.details.map((detail) => detail.message);
+    throw new APIError("Validation Failed", 400, errors);
+  }
+  return value;
 };
 
 // =========================================================================
-// A. CORE CRUD & STATUS MANAGEMENT CONTROLLERS
+// CONTROLLER FUNCTIONS
 // =========================================================================
 
-/** 1. POST / Create New User (Admin Panel के लिए) */
+/** 1. POST /: Create New User (Permission: 'manage:users') */
 const createUser = asyncHandler(async (req, res) => {
-  const { email, full_name, password, role_id } = req.body;
-  const creatorId = req.user.user_id;
+  const data = syncValidateSchema(createUserSchema, req.body);
+  const newUser = await userService.createUser(data);
 
-  // Validation is done by Joi, but we keep the logic clean
-  const newUser = await UserService.createUserByAdmin(req.body, creatorId);
+  // Security: Response से password hash हटाएँ
+  delete newUser.password_hash;
 
-  return res.status(201).json({
-    message: `उपयोगकर्ता '${newUser.email}' सफलतापूर्वक बन गया।`,
+  res.status(201).json({
+    message: `User '${newUser.email}' created and role assigned successfully.`,
     data: newUser,
   });
 });
 
-/** 2. GET /:userId - ID द्वारा उपयोगकर्ता को प्राप्त करता है। */
-const getUserById = asyncHandler(async (req, res) => {
-  const userId = handleIdValidation(req.params.userId, "User ID");
-
-  const user = await UserService.fetchUserById(userId);
-
-  return res.status(200).json({ data: user });
-});
-
-/** 3. GET / - सभी उपयोगकर्ताओं को प्राप्त करता है (Paginated)। */
+/** 2. GET /: Get All Users (Permission: 'read:users') */
 const getAllUsers = asyncHandler(async (req, res) => {
-  const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 25;
-  const search = req.query.search;
-  const isActive =
-    req.query.isActive === "false"
-      ? false
-      : req.query.isActive === "true"
-      ? true
-      : undefined;
-  const isVerified =
-    req.query.isVerified === "false"
-      ? false
-      : req.query.isVerified === "true"
-      ? true
-      : undefined;
-  const offset = (page - 1) * limit;
-
-  const { data: users, total_count } = await UserService.fetchAllUsers({
-    limit,
-    offset,
-    search,
-    is_active: isActive,
-    is_verified: isVerified,
+  const { limit = 10, page = 1 } = req.query;
+  const result = await userService.getAllUsers({
+    limit: parseInt(limit),
+    page: parseInt(page),
   });
-
-  const totalPages = Math.ceil(total_count / limit);
-
-  return res.status(200).json({
-    message: "Master Users retrieved successfully.",
-    pagination: {
-      total_records: total_count,
-      total_pages: totalPages,
-      current_page: page,
-      limit: limit,
-    },
-    data: users,
+  res.status(200).json({
+    message: "Users fetched successfully.",
+    data: result.data,
+    total_count: result.total_count,
   });
 });
 
-/** 4. PUT /:userId - उपयोगकर्ता डेटा को अपडेट करता है (General). */
+/** 3. GET /:userId: Get User by ID (Permission: 'read:users') */
+const getUserById = asyncHandler(async (req, res) => {
+  const userId = parseInt(req.params.userId);
+  const user = await userService.getUserById(userId);
+
+  if (!user) {
+    return res
+      .status(404)
+      .json({ message: `User with ID ${userId} not found.` });
+  }
+  delete user.password_hash;
+  res
+    .status(200)
+    .json({ message: "User details fetched successfully.", data: user });
+});
+
+/** 4. PUT /:userId: Update User Details (Name/Status) (Permission: 'manage:users') */
 const updateUser = asyncHandler(async (req, res) => {
-  const userId = handleIdValidation(req.params.userId, "User ID");
+  const userId = parseInt(req.params.userId);
+  const data = syncValidateSchema(updateUserSchema, req.body);
 
-  // Joi validation handles data cleansing; we just use the body.
-  const updatedUser = await UserService.updateCoreUserDetails(userId, req.body);
+  const updatedUser = await userService.updateUser(userId, data);
 
-  return res.status(200).json({
-    message: `उपयोगकर्ता '${updatedUser.email}' सफलतापूर्वक अपडेट हुआ।`,
-    data: updatedUser,
-  });
+  if (!updatedUser) {
+    return res
+      .status(404)
+      .json({ message: `User with ID ${userId} not found.` });
+  }
+  delete updatedUser.password_hash;
+  res
+    .status(200)
+    .json({ message: "User updated successfully.", data: updatedUser });
 });
 
-/** 5. PATCH /role/:userId - उपयोगकर्ता की भूमिका (Role) बदलता है। */
+/** 5. PATCH /role/:userId: Change User Role (Permission: 'manage:users') */
 const changeUserRole = asyncHandler(async (req, res) => {
-  const userId = handleIdValidation(req.params.userId, "User ID");
-  const { role_id } = req.body;
+  const userId = parseInt(req.params.userId);
+  const { role_id } = syncValidateSchema(changeUserRoleSchema, req.body);
 
-  const updatedUser = await UserService.changeUserRole(userId, Number(role_id));
+  const updatedUser = await userService.changeUserRole(userId, role_id);
 
-  return res.status(200).json({
-    message: `उपयोगकर्ता '${updatedUser.email}' की भूमिका सफलतापूर्वक अपडेट हुई।`,
-    data: updatedUser,
-  });
+  if (!updatedUser) {
+    return res
+      .status(404)
+      .json({ message: `User ID ${userId} या Role ID ${role_id} नहीं मिला।` });
+  }
+  delete updatedUser.password_hash;
+  res
+    .status(200)
+    .json({
+      message: `Role ID ${role_id} successfully assigned to User ID ${userId}.`,
+      data: updatedUser,
+    });
 });
 
-/** 6. PATCH /password/reset/:userId - उपयोगकर्ता का पासवर्ड रीसेट करता है। (Admin द्वारा) */
+/** 6. PATCH /password/:userId: Reset User Password (Permission: 'manage:users') */
 const resetUserPassword = asyncHandler(async (req, res) => {
-  const userId = handleIdValidation(req.params.userId, "User ID");
-  const { newPassword } = req.body;
+  const userId = parseInt(req.params.userId);
+  const { new_password } = syncValidateSchema(
+    resetUserPasswordSchema,
+    req.body
+  );
 
-  const result = await UserService.resetUserPassword(userId, newPassword);
+  const updatedUser = await userService.resetUserPassword(userId, new_password);
 
-  return res.status(200).json({
-    message: `उपयोगकर्ता (ID: ${result.user_id}) का पासवर्ड सफलतापूर्वक रीसेट किया गया।`,
-    data: result,
-  });
+  if (!updatedUser) {
+    return res
+      .status(404)
+      .json({ message: `User with ID ${userId} not found.` });
+  }
+
+  res
+    .status(200)
+    .json({
+      message: `Password successfully reset for User ID ${userId}.`,
+      data: updatedUser,
+    });
 });
 
-/** 7. PATCH /status/deactivate/:userId - उपयोगकर्ता को निष्क्रिय (Deactivate) करता है। */
+/** 7. PATCH /deactivate/:userId: Deactivate User (Permission: 'manage:users') */
 const deactivateUser = asyncHandler(async (req, res) => {
-  const userId = handleIdValidation(req.params.userId, "User ID");
+  const userId = parseInt(req.params.userId);
+  const updatedUser = await userService.deactivateUser(userId);
 
-  const deactivated = await UserService.updateStatus(userId, false);
-
-  return res.status(200).json({
-    message: `उपयोगकर्ता (ID: ${userId}) सफलतापूर्वक निष्क्रिय किया गया।`,
-    data: {
-      user_id: deactivated.user_id,
-      email: deactivated.email,
-      is_active: deactivated.is_active,
-    },
-  });
+  if (!updatedUser) {
+    return res
+      .status(404)
+      .json({ message: `User with ID ${userId} not found.` });
+  }
+  delete updatedUser.password_hash;
+  res
+    .status(200)
+    .json({
+      message: `User ID ${userId} deactivated successfully.`,
+      data: updatedUser,
+    });
 });
 
-/** 8. PATCH /status/activate/:userId - उपयोगकर्ता को पुनः सक्रिय (Activate) करता है। */
+/** 8. PATCH /activate/:userId: Activate User (Permission: 'manage:users') */
 const activateUser = asyncHandler(async (req, res) => {
-  const userId = handleIdValidation(req.params.userId, "User ID");
+  const userId = parseInt(req.params.userId);
+  const updatedUser = await userService.activateUser(userId);
 
-  const activated = await UserService.updateStatus(userId, true);
-
-  return res.status(200).json({
-    message: `उपयोगकर्ता (ID: ${userId}) सफलतापूर्वक सक्रिय किया गया।`,
-    data: {
-      user_id: activated.user_id,
-      email: activated.email,
-      is_active: activated.is_active,
-    },
-  });
+  if (!updatedUser) {
+    return res
+      .status(404)
+      .json({ message: `User with ID ${userId} not found.` });
+  }
+  delete updatedUser.password_hash;
+  res
+    .status(200)
+    .json({
+      message: `User ID ${userId} activated successfully.`,
+      data: updatedUser,
+    });
 });
 
 module.exports = {
   createUser,
-  getUserById,
   getAllUsers,
+  getUserById,
   updateUser,
   changeUserRole,
   resetUserPassword,

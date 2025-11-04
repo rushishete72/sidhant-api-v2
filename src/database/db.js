@@ -37,11 +37,11 @@ if (process.env.DATABASE_URL) {
     connectionString: process.env.DATABASE_URL,
     ...sslConfig,
     max: 20,
-    idleTimeoutMillis: 30000,
+    idleTimeoutMillis: 120000,
     // CRITICAL: Explicitly set keepAlive flags for the driver
     keepAlive: true,
     keepAliveInitialDelay: 30000,
-    connectionTimeoutMillis: 10000, // Connection must succeed within 10s
+    connectionTimeoutMillis: 30000, // Connection must succeed within 10s
   };
 } else {
   /**************************************************************

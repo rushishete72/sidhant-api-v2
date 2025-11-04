@@ -1,113 +1,88 @@
-/*
- * File: src/modules/master/users/user.model.js
- * Module: Admin User Management (Read/Update/CRUD)
- * Absolute Accountability: Integrates all legacy CRUD logic using mandatory db.tx.
- */
+// File: src/modules/master/users/user.model.js
 
-const { db, pgp } = require("../../../database/db");
-const CustomError = require("../../../utils/errorHandler");
+// निर्भरताएँ
+const { db, pgp } = require("../../../../src/database/db");
+const APIError = require("../../../utils/errorHandler");
+// Password hashing के लिए bcrypt की आवश्यकता है (Service Layer में उपयोग होगा, लेकिन Model CRUD Functions पर ध्यान केंद्रित करता है)
+const TABLE_NAME = "master_users";
 
-const T_USERS = "master_users"; // ✅ FIX: Correct table name
-const T_ROLES = "master_roles"; // ✅ FIX: Correct table name
-
-// --- Helper Function to fetch user details with role_name ---
-const getUserByIdWithRole = async (userId, t = db) => {
-  // Fetches full user data, including role name
+// --- Helper Function ---
+/** उपयोगकर्ता (User) और उसकी भूमिका (Role) को एक साथ प्राप्त करता है। */
+const getUserWithRole = async (userId) => {
   const query = `
-        SELECT u.*, r.role_name 
-        FROM ${T_USERS} u
-        LEFT JOIN ${T_ROLES} r ON u.role_id = r.role_id
-        WHERE u.user_id = $1
+        SELECT
+            u.user_id, u.full_name, u.email, 
+            u.is_active, u.is_verified, u.last_login,
+            r.role_id, r.role_name
+        FROM master_users u
+        LEFT JOIN master_roles r ON u.role_id = r.role_id
+        WHERE u.user_id = $1;
     `;
-  return t.oneOrNone(query, [userId]);
+  return db.oneOrNone(query, [userId]);
 };
 
 // =========================================================================
-// A. CORE CRUD FUNCTIONS (Secured versions of user's uploaded logic)
+// CORE FUNCTIONS
 // =========================================================================
 
-/** 1. Creates a new user (Admin Panel) - Requires db.tx */
-const createUser = async (data, t) => {
+/** 1. एक नया उपयोगकर्ता (User) बनाता है। */
+const createUser = async (data) => {
+  const { full_name, email, password_hash, role_id } = data;
+
+  // सुनिश्चित करें कि केवल आवश्यक कॉलम डालें
   const columns = new pgp.helpers.ColumnSet(
-    [
-      "email",
-      "full_name",
-      "password_hash",
-      "role_id",
-      "is_active",
-      "is_verified",
-      "created_by",
-    ],
-    { table: T_USERS }
+    ["full_name", "email", "password_hash", "role_id", "is_verified"],
+    { table: TABLE_NAME }
   );
 
   const insertQuery =
-    pgp.helpers.insert(data, columns, T_USERS) + ` RETURNING user_id;`;
+    pgp.helpers.insert(
+      {
+        full_name: full_name.trim(),
+        email: email.toLowerCase().trim(),
+        password_hash: password_hash,
+        role_id: role_id,
+        is_verified: true, // Admin-created user को तुरंत सत्यापित (verified) माना जाता है।
+      },
+      columns,
+      TABLE_NAME
+    ) + " RETURNING user_id;";
 
   try {
-    const result = await t.one(insertQuery); // Use transaction object 't'
-    return getUserByIdWithRole(result.user_id, t);
+    const result = await db.one(insertQuery);
+    return getUserWithRole(result.user_id);
   } catch (error) {
     if (error.code === "23505") {
-      throw new CustomError("यह ईमेल पहले से मौजूद है।", 409);
+      throw new APIError("यह ईमेल (Email) पहले से मौजूद है।", 409);
     }
-    if (error.code === "23503") {
-      throw new CustomError("अमान्य भूमिका ID (Role ID) प्रदान की गई है।", 400);
-    }
-    throw new CustomError("Database insertion failed.", 500, error.message);
+    console.error("Database Error in createUser:", error);
+    throw new APIError("Database insertion failed.", 500);
   }
 };
 
-/** 2. Fetches user by ID (Used by controller and internally) */
-const getUserById = async (userId, t = db) => {
-  return getUserByIdWithRole(userId, t);
+/** 2. ID द्वारा उपयोगकर्ता को प्राप्त करता है। */
+const getUserById = async (userId) => {
+  return getUserWithRole(userId);
 };
 
-/** 3. Admin: Fetches all user details with filtering/pagination (Used by getAllUsers) */
-const getAllUsers = async ({
-  limit = 25,
-  offset = 0,
-  search = "",
-  isActive = null,
-  isVerified = null,
-}) => {
+/** 3. सभी उपयोगकर्ताओं और उनकी भूमिकाओं को प्राप्त करता है। */
+const getAllUsers = async ({ limit, offset }) => {
   const params = { limit, offset };
-  let whereConditions = "";
-
-  if (isActive !== null) {
-    whereConditions += ' AND u."is_active" = $<isActive>';
-    params.isActive = isActive;
-  }
-  if (isVerified !== null) {
-    whereConditions += ' AND u."is_verified" = $<isVerified>';
-    params.isVerified = isVerified;
-  }
-  if (search) {
-    whereConditions +=
-      ' AND (u."email" ILIKE $<searchPattern> OR u."full_name" ILIKE $<searchPattern>)';
-    params.searchPattern = `%${search}%`;
-  }
-
-  const baseQuery = `
-        FROM ${T_USERS} u
-        LEFT JOIN ${T_ROLES} r ON u.role_id = r.role_id 
-        WHERE 1=1 ${whereConditions}
-    `;
-
-  const countQuery = `SELECT COUNT(*) ${baseQuery}`;
 
   const dataQuery = `
-        SELECT 
-            u.user_id, u.email, u.full_name, u.is_active, u.is_verified, 
-            r.role_name, u.created_at
-        ${baseQuery}
-        ORDER BY u.created_at DESC
+        SELECT
+            u.user_id, u.full_name, u.email, u.is_active, u.is_verified, 
+            r.role_name
+        FROM master_users u
+        LEFT JOIN master_roles r ON u.role_id = r.role_id
+        ORDER BY u.full_name ASC
         LIMIT $<limit> OFFSET $<offset>
     `;
 
-  // Using db.tx for atomicity in combined fetch
+  const countQuery = `SELECT COUNT(*) FROM master_users`;
+
   const [dataResult, countResult] = await db.tx((t) => {
-    return Promise.all([t.any(dataQuery, params), t.one(countQuery, params)]);
+    return Promise.all([t.any(dataQuery, params), t.one(countQuery)]);
   });
 
   return {
@@ -116,55 +91,61 @@ const getAllUsers = async ({
   };
 };
 
-/** 4. Updates core user data (Used for general update and role/password dedicated routes) - Requires db.tx */
-const updateUser = async (userId, data, t) => {
+/** 4. उपयोगकर्ता का नाम/status अपडेट करता है। */
+const updateUser = async (userId, data) => {
   if (Object.keys(data).length === 0) {
-    return getUserByIdWithRole(userId, t);
+    return getUserWithRole(userId);
   }
 
-  const updateData = { ...data, updated_at: new Date() };
+  if (data.full_name) {
+    data.full_name = data.full_name.trim();
+  }
+  if (data.email) {
+    data.email = data.email.toLowerCase().trim();
+  }
+  data.updated_at = new Date();
+
+  // केवल allowed columns को पास करें
+  const allowedColumns = [
+    "full_name",
+    "is_active",
+    "is_verified",
+    "password_hash",
+    "role_id",
+    "updated_at",
+  ];
+  const updateData = {};
+  allowedColumns.forEach((col) => {
+    if (data[col] !== undefined) {
+      updateData[col] = data[col];
+    }
+  });
+
+  // यदि updateData खाली है, तो रोल के साथ user लौटाएँ
+  if (Object.keys(updateData).length === 0) return getUserWithRole(userId);
 
   const updateQuery =
-    pgp.helpers.update(updateData, null, T_USERS) +
+    pgp.helpers.update(updateData, allowedColumns, TABLE_NAME) +
     ` WHERE user_id = ${userId} RETURNING user_id`;
 
   try {
-    const result = await t.one(updateQuery);
-    return getUserByIdWithRole(result.user_id, t);
+    const result = await db.oneOrNone(updateQuery);
+    if (!result) return null;
+
+    return getUserWithRole(result.user_id);
   } catch (error) {
     if (error.code === "23505") {
-      throw new CustomError("अपडेट विफल: यह ईमेल पहले से मौजूद है।", 409);
+      throw new APIError("अपडेट विफल: यह ईमेल (Email) पहले से मौजूद है।", 409);
     }
-    if (error.code === "23503") {
-      throw new CustomError("अमान्य भूमिका ID (Role ID) प्रदान की गई है।", 400);
-    }
-    throw new CustomError("Database update failed.", 500, error.message);
+    console.error("DB Error in updateUser:", error);
+    throw new APIError("Database update failed.", 500);
   }
-};
-
-/** 5. Deactivates user (Sets is_active=FALSE) - Requires db.tx */
-const deactivateUser = async (userId, t) => {
-  const query = pgp.as.format(
-    "UPDATE $1^ SET is_active = FALSE, updated_at = NOW() WHERE user_id = $2 AND is_active = TRUE RETURNING user_id, email, is_active;",
-    [T_USERS, userId]
-  );
-  return t.oneOrNone(query);
-};
-
-/** 6. Activates user (Sets is_active=TRUE) - Requires db.tx */
-const activateUser = async (userId, t) => {
-  const query = pgp.as.format(
-    "UPDATE $1^ SET is_active = TRUE, updated_at = NOW() WHERE user_id = $2 AND is_active = FALSE RETURNING user_id, email, is_active;",
-    [T_USERS, userId]
-  );
-  return t.oneOrNone(query);
 };
 
 module.exports = {
   createUser,
   getUserById,
   getAllUsers,
-  updateUser,
-  deactivateUser,
-  activateUser,
+  updateUser, // सभी PUT, PATCH, deactivate, activate के लिए आधार
+  getUserWithRole,
 };
