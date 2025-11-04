@@ -1,81 +1,95 @@
-// File: src/database/db.js
-// FINAL, 100% CORRECTED VERSION
-// This version fixes the "invalid command-line argument" error AND
-// correctly sets the search_path by returning a promise in the 'connect' event.
+/*
+ * File: src/database/db.js
+ * Absolute Accountability: FINAL HARDENING.
+ * Removed unrecognized "cap" option. Ensures KeepAlive settings are forced.
+ */
 
-const pgp = require("pg-promise")({
-  /* Initialization Options */
-  connect(e) {
-    const cp = e.client.connectionParameters;
-    console.log(`[DB] सफलतापूर्वक डेटाबेस से कनेक्ट हुआ: ${cp.database}`);
-
-    // CRITICAL FIX: Return the promise.
-    // pg-promise will wait for this promise to resolve
-    // before releasing the connection for its first use.
-    // This 100% solves the "relation does not exist" race condition.
-    return e.client.query(
-      "SET search_path = users, masters, inventory, qc, procurement, public"
-    );
-  },
-  disconnect(e) {
-    const cp = e.client.connectionParameters;
-    console.log(`[DB] डेटाबेस से डिस्कनेक्ट हुआ: ${cp.database}`);
-  },
-  error(err, e) {
-    // Log all connection-level errors
-    console.error("[DB] FATAL DB-CONNECTION ERROR:", err);
-  },
+require("dotenv").config({
+  path: require("path").resolve(process.cwd(), ".env"),
 });
 
-require("dotenv").config();
+// CRITICAL FIX: Initializing pgp WITHOUT unrecognized options
+const pgp = require("pg-promise")();
 
-// 1. Get the connection string
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("[DB] FATAL ERROR: .env फ़ाइल में DATABASE_URL नहीं मिला।");
-}
+// --- CRITICAL FIX: Connection Logic Rebuilt ---
+let cn;
 
-// 2. Determine SSL configuration
-const isRenderHost = connectionString.includes(".render.com");
-let sslConfig;
+if (process.env.DATABASE_URL) {
+  /**************************************************************
+   * PRODUCTION / RENDER CONFIG
+   **************************************************************/
+  console.log("[DB] DATABASE_URL ka upyog kiya ja raha hai (KeepAlive Mode).");
 
-if (isRenderHost) {
-  console.log(
-    "[DB] Production/Render.com SSL (rejectUnauthorized: false) के साथ कनेक्ट हो रहा है।"
-  );
-  sslConfig = {
-    rejectUnauthorized: false, // Required for Render
+  const useSSL = process.env.DB_SSL === "true";
+  const sslConfig = useSSL ? { ssl: { rejectUnauthorized: false } } : {};
+
+  if (useSSL) {
+    console.log(
+      "[DB] DB_SSL=true. SSL (rejectUnauthorized: false) का उपयोग किया जा रहा है।"
+    );
+  } else {
+    console.log(
+      "[DB] DB_SSL=false ya set nahi hai. SSL का उपयोग नहीं किया जा रहा है।"
+    );
+  }
+
+  cn = {
+    connectionString: process.env.DATABASE_URL,
+    ...sslConfig,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    // CRITICAL: Explicitly set keepAlive flags for the driver
+    keepAlive: true,
+    keepAliveInitialDelay: 30000,
+    connectionTimeoutMillis: 10000, // Connection must succeed within 10s
   };
 } else {
-  // We check NODE_ENV for local development
-  const isProduction = process.env.NODE_ENV === "production";
-  if (isProduction) {
-    console.log("[DB] Production (Non-Render) SSL के साथ कनेक्ट हो रहा है।");
-    sslConfig = { rejectUnauthorized: false };
-  } else {
-    console.log("[DB] Local development (no SSL) के साथ कनेक्ट हो रहा है।");
-    sslConfig = undefined; // local dev
+  /**************************************************************
+   * LOCAL DEVELOPMENT CONFIG
+   **************************************************************/
+  console.log(
+    "[DB] Local DB_HOST, DB_USER ka upyog kiya ja raha hai (Advanced Mode)."
+  );
+
+  const useSSL = process.env.DB_SSL === "true";
+  const sslConfig = useSSL ? { ssl: { rejectUnauthorized: false } } : {};
+  if (useSSL) {
+    console.log(
+      "[DB] DB_SSL=true. SSL (rejectUnauthorized: false) का उपयोग किया जा रहा है।"
+    );
   }
+
+  cn = {
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    ...sslConfig,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    // CRITICAL: Explicitly set keepAlive flags for the driver
+    keepAlive: true,
+    keepAliveInitialDelay: 30000,
+    connectionTimeoutMillis: 10000,
+  };
 }
+// --- End of Fix ---
 
-// 3. Create the connection object
-const cn = {
-  connectionString: connectionString,
-  ssl: sslConfig,
-  statement_timeout: 10000, // 10 seconds
-  // The 'options' fix was incorrect and has been REMOVED.
-};
-
-// Create the database instance
+// Initialize the database instance
 const db = pgp(cn);
 
-// Test the connection
-db.one("SELECT 1 AS value")
-  .then((data) => {
-    console.log("[DB] कनेक्शन टेस्ट सफल। (SELECT 1)");
+// Test connectivity immediately on startup
+db.connect()
+  .then((obj) => {
+    obj.done();
+    console.log("[DB] PostgreSQL connection pool initialized and verified.");
   })
   .catch((error) => {
-    console.error("[DB] !!डेटाबेस कनेक्शन टेस्ट विफल!!:", error.message);
+    console.error(
+      "🚨 FATAL DB ERROR: Could not connect to PostgreSQL.",
+      error.message
+    );
   });
 
 module.exports = { db, pgp };

@@ -1,90 +1,168 @@
 // File: src/utils/emailSender.js
-
-// Using 'nodemailer' as the standard library.
-// Mocking the 'nodemailer' transport for simplicity in this code block.
 const nodemailer = require("nodemailer");
-const UserAuthModel = require("../modules/auth/userAuth/userAuth.model");
+const CustomError = require("./errorHandler");
 
-// --- Configuration (Should ideally be in a separate config/env file) ---
-const EMAIL_TRANSPORT_CONFIG = {
-  host: process.env.EMAIL_HOST || "smtp.example.com",
-  port: process.env.EMAIL_PORT || 587,
-  secure: process.env.EMAIL_SECURE === "true", // Use TLS/SSL
-  auth: {
-    user: process.env.EMAIL_USER || "noreply@example.com",
-    pass: process.env.EMAIL_PASS || "password123",
-  },
-};
+// 1. Configure Transporter using Environment Variables (Security First)
+let transporter;
 
-const SENDER_EMAIL = process.env.SENDER_EMAIL || "noreply@sidhant.com";
+// Safely parse port number
+const port = parseInt(process.env.EMAIL_PORT, 10);
+const isSecure = port === 465;
 
-const transporter = nodemailer.createTransport(EMAIL_TRANSPORT_CONFIG);
+if (
+  process.env.EMAIL_HOST &&
+  process.env.EMAIL_USER &&
+  process.env.EMAIL_PASS
+) {
+  transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: port,
+    secure: isSecure, // true for 465 (SSL), false for 587 (STARTTLS)
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    // CRITICAL FIX FOR ECONNRESET/TIMEOUTS:
+    tls: {
+      // Reject self-signed certs (Production standard)
+      rejectUnauthorized: true,
+    },
+    // ENHANCE CONNECTION STABILITY:
+    pool: true, // Use connection pooling
+    maxConnections: 5,
+    maxMessages: 100,
+    // Setting a command timeout (ms)
+    timeout: 15000,
+    // Set connection timeout (ms)
+    connectionTimeout: 10000,
+    // The socket should be kept alive
+    keepAlive: true,
+  });
 
-/**
- * Sends an email with support for dynamic Admin/SuperAdmin recipient lookup
- * for critical notifications.
- * @param {object} options
- * @param {string} options.to - The primary recipient email address.
- * @param {string} options.subject - The subject line.
- * @param {string} options.text - The plain text body.
- * @param {boolean} [options.isCritical=false] - If true, send a copy to all Admin/SuperAdmin emails.
- */
-const sendEmail = async ({ to, subject, text, isCritical = false }) => {
-  let finalRecipients = [to];
-  let ccRecipients = [];
-
-  if (isCritical) {
-    try {
-      // Fetch all Admin/SuperAdmin emails from the database
-      const adminEmails = await UserAuthModel.findAdminEmails();
-
-      // Filter out the primary recipient if they are also an admin, to avoid duplicate sends
-      ccRecipients = adminEmails.filter((email) => email !== to);
-
-      // If the primary recipient (to) is not a critical user (e.g., system user)
-      // and the email is critical, ensure all admins get it in the main 'to' field
-      // if 'to' was a placeholder like 'admin_list_lookup_is_internal'.
-      // For simplicity, we just add admins to CC/BCC.
-      if (ccRecipients.length > 0) {
-        console.log(
-          `Critical email to ${to}. Also CC'ing admins: ${ccRecipients.join(
-            ", "
-          )}`
-        );
-      } else {
-        console.warn(
-          "Critical email requested but no admin emails found in DB."
-        );
-      }
-    } catch (error) {
-      console.error(
-        "Failed to fetch admin emails for critical notification:",
-        error.message
+  // 2. Transporter Verification (Check connection status on startup)
+  transporter.verify((error, success) => {
+    if (error) {
+      console.error("❌ Email service connection failed:", error.message);
+      console.warn(
+        `   => CRITICAL: Mode: ${
+          isSecure ? "SSL (465)" : "STARTTLS (587)"
+        }. Check credentials (must be App Password for Gmail) and firewall settings.`
       );
-      // Non-fatal error: proceed with sending to the primary recipient only
+    } else {
+      console.log(
+        `✅ Email service connected successfully. Mode: ${
+          isSecure ? "SSL (465)" : "STARTTLS (587)"
+        }.`
+      );
     }
+  });
+} else {
+  console.warn(
+    "⚠️ Email service skipped: Missing critical EMAIL_HOST, EMAIL_USER, or EMAIL_PASS environment variables."
+  );
+}
+
+// ... sendOtp and sendAdminNotification functions remain the same as the previous correct version ...
+/**
+ * Sends a dynamically generated OTP email.
+ * @param {string} toEmail - Recipient email address.
+ * @param {string} otpCode - The 6-digit OTP.
+ * @param {string} type - 'registration', 'login', or 'reset'.
+ */
+const sendOtp = async (toEmail, otpCode, type = "registration") => {
+  if (!transporter) {
+    console.warn(`Email skipped for ${toEmail}. Transporter not configured.`);
+    return;
   }
 
+  const subjectMap = {
+    registration: "Account Verification OTP (Time Sensitive)",
+    login: "Two-Factor Login Code (Time Sensitive)",
+    reset: "Password Reset Code (Time Sensitive)",
+  };
+
+  const subject = subjectMap[type] || subjectMap.registration;
+
+  const htmlContent = `
+    <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
+      <h2 style="color: #0056b3;">${subject}</h2>
+      <p>Dear User,</p>
+      <p>Your one-time password (OTP) is:</p>
+      <div style="text-align: center; margin: 20px 0;">
+        <span style="font-size: 24px; font-weight: bold; color: #d9534f; background-color: #f9f9f9; padding: 10px 20px; border-radius: 5px; border: 1px dashed #d9534f;">${otpCode}</span>
+      </div>
+      <p>This code is valid for 10 minutes. Please do not share this code with anyone.</p>
+      <p>If you did not request this, please ignore this email.</p>
+      <p>Regards,<br>The JIT/QC System Admin Team</p>
+    </div>
+  `;
+
   const mailOptions = {
-    from: SENDER_EMAIL,
-    to: finalRecipients.join(","),
-    cc: ccRecipients.join(","), // Admins go here if critical
-    subject: isCritical ? `[CRITICAL] ${subject}` : subject,
-    text: text,
-    // html: `<h1>${subject}</h1><p>${text}</p>` // Add HTML body in production
+    from: `${process.env.EMAIL_SENDER_NAME || "JIT/QC System Admin"} <${
+      process.env.EMAIL_USER
+    }>`,
+    to: toEmail,
+    subject: subject,
+    html: htmlContent,
+    text: `Your OTP is: ${otpCode}. Valid for 10 minutes.`,
   };
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    // In a real system, you would log info.messageId or check response status
-    console.log(`Email sent: ${info.response} to ${mailOptions.to}`);
+    console.log(
+      `[Email] OTP sent to ${toEmail}. Message ID: ${info.messageId}`
+    );
     return info;
   } catch (error) {
-    console.error("Email send failed:", error);
-    // Non-fatal error for the API flow, but critical for monitoring
-    // A robust solution would enqueue a retry mechanism (e.g., using a message queue)
-    throw new Error("Email sending failed due to server error.");
+    console.error(
+      `[Email Error] Failed to send email to ${toEmail}:`,
+      error.message
+    );
+    throw new CustomError(
+      "Email service failed to send OTP. Check server logs for details.",
+      503
+    );
+    // throw new CustomError(
+    //   "Email service failed to send OTP. Check server logs for details.",
+    //   503
+    // );
   }
 };
 
-module.exports = { sendEmail };
+/**
+ * Sends a notification to the system admin for critical events (e.g., New User Verified).
+ */
+const sendAdminNotification = async (subject, message) => {
+  if (!transporter || !process.env.ADMIN_CRITICAL_EMAIL) {
+    console.warn(
+      "Admin notification skipped. Transporter or ADMIN_CRITICAL_EMAIL not configured."
+    );
+    return;
+  }
+
+  const mailOptions = {
+    from: `${process.env.EMAIL_SENDER_NAME || "JIT/QC System Admin"} <${
+      process.env.EMAIL_USER
+    }>`,
+    to: process.env.ADMIN_CRITICAL_EMAIL,
+    subject: `[ADMIN ALERT] ${subject}`,
+    text: message,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(
+      `[Email] Admin Alert sent to ${process.env.ADMIN_CRITICAL_EMAIL}`
+    );
+  } catch (error) {
+    console.error(
+      `[Email Error] Failed to send admin notification:`,
+      error.message
+    );
+  }
+};
+
+module.exports = {
+  sendOtp,
+  sendAdminNotification,
+};

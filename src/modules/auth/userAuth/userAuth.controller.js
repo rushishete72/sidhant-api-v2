@@ -1,35 +1,56 @@
 // File: src/modules/auth/userAuth/userAuth.controller.js
-// FIXED: Controller now only passes fields defined in the updated Joi schema.
+// FINAL VERSION: Synchronized for 2-Step Registration, 2-Step Login, and Stateful Logout.
 
-const UserAuthService = require("./userAuth.service");
 const asyncHandler = require("../../../utils/asyncHandler");
+const UserAuthService = require("./userAuth.service");
+const CustomError = require("../../../utils/errorHandler"); // Ensure CustomError is available
 
 /**
- * Register a new user
- * POST /api/v2/auth/register
+ * Register a new user - Step 1: Create Account & Send OTP
+ * Maps to POST /api/v1/auth/register
  */
 const register = asyncHandler(async (req, res) => {
-  // CRITICAL FIX: Only destructure fields that are in the Joi schema.
-  // role_id is no longer accepted from the client.
-  const { email, password, full_name } = req.body;
-
-  // Pass only the validated fields to the service.
-  const newUser = await UserAuthService.registerUser({
-    email,
-    password,
-    full_name,
-  });
+  const newUser = await UserAuthService.registerUser_Step1_CreateAndSendOTP(
+    req.body
+  );
 
   res.status(201).json({
     success: true,
-    message: "User registered successfully. Welcome!",
-    data: newUser,
+    status: "success",
+    message: newUser.message,
+    data: {
+      user_id: newUser.user_id,
+      email: newUser.email,
+    },
+  });
+});
+
+/**
+ * Register a new user - Step 2: Verify OTP and Activate User
+ * Maps to POST /api/v1/auth/verify-registration-otp
+ */
+const verifyRegistrationOTP = asyncHandler(async (req, res) => {
+  const { user_id, otp } = req.body;
+
+  const result = await UserAuthService.registerUser_Step2_VerifyOTPAndActivate(
+    user_id,
+    otp
+  );
+
+  res.status(200).json({
+    success: true,
+    status: "success",
+    message: result.message,
+    data: {
+      user_id: result.user_id,
+      email: result.email,
+    },
   });
 });
 
 /**
  * Step 1: Login - Password Check and OTP Send
- * POST /api/v2/auth/login/step1
+ * Maps to POST /api/v1/auth/login/step1
  */
 const loginStep1 = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
@@ -40,17 +61,19 @@ const loginStep1 = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
-    user_id: result.user_id,
+    data: { user_id: result.user_id },
   });
 });
 
 /**
- * Step 2: Login - OTP Verify and JWT Token Generate
- * POST /api/v2/auth/login/step2
+ * Step 2: Login - OTP Verify and Access/Refresh Token Generate
+ * Maps to POST /api/v1/auth/login/step2
  */
 const loginStep2 = asyncHandler(async (req, res) => {
   const { user_id, otp } = req.body;
+
   const result = await UserAuthService.loginStep2_OTPverify_tokenGenerate(
     user_id,
     otp
@@ -58,29 +81,44 @@ const loginStep2 = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
-    token: result.token,
-    user: result.user,
+    data: {
+      token: result.token, // Access Token
+      refreshToken: result.refreshToken, // Refresh Token
+      user: result.user,
+    },
   });
 });
 
 /**
- * Logout
- * POST /api/v2/auth/logout
+ * Logout (CRITICAL: Invalidates Refresh Token in DB)
+ * Maps to POST /api/v1/auth/logout
  */
 const logout = asyncHandler(async (req, res) => {
-  // req.user contains the decoded JWT payload from the auth middleware
-  const result = await UserAuthService.logout(req.user);
+  // We read the Refresh Token from the request body for deletion.
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    throw new CustomError(
+      "Refresh token is required for secure session invalidation.",
+      400
+    );
+  }
+
+  // The service deletes the Refresh Token from the user_sessions table atomically.
+  const result = await UserAuthService.logout(refreshToken);
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
   });
 });
 
 /**
  * Forgot Password - Step 1: Send OTP
- * POST /api/v2/auth/forgot-password/step1
+ * Maps to POST /api/v1/auth/forgot-password/step1
  */
 const forgotPasswordStep1 = asyncHandler(async (req, res) => {
   const { email } = req.body;
@@ -88,13 +126,14 @@ const forgotPasswordStep1 = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
   });
 });
 
 /**
  * Reset Password - Step 2: Verify OTP and Update Password
- * POST /api/v2/auth/forgot-password/step2
+ * Maps to POST /api/v1/auth/forgot-password/step2
  */
 const forgotPasswordStep2 = asyncHandler(async (req, res) => {
   const { email, otp, new_password } = req.body;
@@ -106,12 +145,14 @@ const forgotPasswordStep2 = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     success: true,
+    status: "success",
     message: result.message,
   });
 });
 
 module.exports = {
   register,
+  verifyRegistrationOTP,
   loginStep1,
   loginStep2,
   logout,

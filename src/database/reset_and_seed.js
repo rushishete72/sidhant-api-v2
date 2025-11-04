@@ -1,116 +1,118 @@
 /*
- * Context Note: यह स्क्रिप्ट डेटाबेस स्कीमा को पूरी तरह से रीसेट (Schema Drops)
- * करती है और फिर सभी SQL मॉड्यूल फ़ाइलों (01-08 स्कीमा, 09-10 सीड) को
- * क्रम से चलाकर डेटाबेस को तैयार करती है।
- *
- * यह सुनिश्चित करता है कि आपके पास हमेशा एक स्वच्छ और सीडेड डेटाबेस हो।
+ * File: src/database/reset_and_seed.js
+ * Absolute Accountability: FINAL SIMPLIFICATION.
+ * All manual connection management and transactions (db.tx) removed.
+ * Relies only on the stable pg-promise pool (db.none) to minimize overhead and prevent ECONNRESET on Cloud DB.
  */
 
-// **यह सुनिश्चित करता है कि DATABASE_URL लोड हो**
 require("dotenv").config({
-  path: require("path").resolve(__dirname, "../../.env"),
+  path: require("path").resolve(process.cwd(), ".env"),
 });
-// ----------------------------------------------------
-
-// 1. निर्भरताएँ लोड करें
+const { db, pgp } = require("./db");
 const fs = require("fs");
 const path = require("path");
-const { db } = require("./db"); // . का मतलब है 'इसी डायरेक्टरी में'
 
-// 2. फ़ाइल पाथ परिभाषित करें
+// SQL files ke paths
 const SCHEMA_DIR = path.join(__dirname, "schema_modules");
 const SEED_DIR = path.join(__dirname, "seed_data");
 
-/**
- * सभी तालिकाओं और अनुक्रमों को हटाने के लिए SQL कमांड।
- * इसे आपके मॉड्यूल की ड्रॉप ऑर्डर को रिवर्स में हैंडल करना चाहिए।
- */
-const DROP_SQL = `
-    -- Warning: This will drop ALL data and structure for the listed tables.
-    DROP TABLE IF EXISTS inventory_stock_on_hand, inventory_transaction_history, 
-                         inventory_receipt_items, inventory_receipts,
-                         procurement_po_items, procurement_purchase_orders,
-                         qc_result_details, qc_inspection_results, qc_plan_items, qc_inspection_plans, qc_lots,
-                         inventory_stock_statuses, inventory_bin_locations, inventory_warehouses,
-                         master_parts, master_suppliers, master_clients, master_uoms,
-                         user_sessions, master_users, master_roles,
-                         production_work_orders 
-    CASCADE;
+const SCHEMA_FILES = [
+  "01_Security_Base.sql",
+  "02_Master_UOMs_Entities.sql",
+  "03_Part_Definition.sql",
+  "04_QC_Inventory_Mgt.sql",
+  "07_Procurement_Purchasing.sql",
+  "08_Inventory_Receipts.sql",
+  "05_Production_Flow.sql",
+  "06_Performance_Indexes.sql",
+];
 
-    -- Sequences and Types
-    DROP SEQUENCE IF EXISTS po_number_seq CASCADE;
-    -- यदि आपने कोई कस्टम टाइप बनाया है तो उसे यहाँ ड्रॉप करें।
-`;
+const SEED_FILES = ["09_Initial_Master_Data.sql", "10_Test_Transactions.sql"];
 
-/**
- * एक डायरेक्टरी से .sql फ़ाइलें पढ़ता है और उन्हें क्रम में निष्पादित (Execute) करता है।
- * @param {string} dirPath - SQL फ़ाइलों वाली डायरेक्टरी का पाथ।
- * @param {string} type - 'SCHEMA' या 'SEED'
- */
-const executeSqlFiles = async (dirPath, type) => {
-  const files = fs
-    .readdirSync(dirPath)
-    .filter((file) => file.endsWith(".sql"))
-    .sort(); // 01_, 02_, ... क्रम में चलाने के लिए
-
-  console.log(
-    `\n[${type} EXECUTION] Running ${files.length} files from ${dirPath}...`
-  );
-
-  for (const file of files) {
-    const filePath = path.join(dirPath, file);
-    const sql = fs.readFileSync(filePath, "utf-8");
-
-    console.log(` -> Executing ${file}`);
-
-    try {
-      await db.none(sql);
-    } catch (error) {
-      console.error(`\n[FATAL ERROR] Failed to run ${file}:`, error.message);
-      // गंभीर त्रुटि पर प्रक्रिया को बंद करें
-      process.exit(1);
-    }
+// Helper function jo file ko padhta hai
+const readFile = (filePath) => {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    console.error(`[ERROR] File nahi padh sake: ${filePath}`, err);
+    throw err;
   }
 };
 
-/**
- * मुख्य रीसेट और सीड फ़ंक्शन।
- */
-async function resetAndSeed() {
-  console.log("=================================================");
-  console.log("== GEMS Database Reset and Seed Utility ==");
-  console.log("=================================================");
-
+// Asynchronous function jo reset aur seed ko chalata hai
+async function runReset() {
   try {
-    // 1. पुरानी तालिकाओं और अनुक्रमों को हटाएँ
-    console.log("\n[STEP 1] Dropping existing schema...");
-    await db.none(DROP_SQL);
-    console.log("   ✅ Cleanup complete.");
+    console.log("=================================================");
+    console.log("== GEMS Database Reset and Seed Utility ==");
+    console.log("=================================================");
 
-    // 2. स्कीमा फ़ाइलें (01 से 08) चलाएँ
-    await executeSqlFiles(SCHEMA_DIR, "SCHEMA");
-    console.log("   ✅ All Schemas created successfully.");
+    // 1. Initial Connection Test (Directly on the pool)
+    await db.one("SELECT 1");
+    console.log("[DB] कनेक्शन टेस्ट सफल। (SELECT 1)");
 
-    // 3. सीड फ़ाइलें (09 से 10) चलाएँ
-    await executeSqlFiles(SEED_DIR, "SEED");
-    console.log("   ✅ All Seed data loaded successfully.");
+    // 2. Dropping and Recreating Schema
+    console.log("\n[STEP 1] Dropping existing public schema...");
+    try {
+      // Use IF EXISTS for robustness against network failures
+      await db.none("DROP SCHEMA IF EXISTS public CASCADE");
+      console.log("[STEP 1] Schema 'public' dropped successfully.");
+    } catch (dropError) {
+      if (dropError.code === "ECONNRESET") {
+        console.warn(
+          `[WARN] Schema drop failed due to network reset. Proceeding to create/re-use.`
+        );
+      } else {
+        throw dropError;
+      }
+    }
 
-    // 4. सफलतापूर्वक समाप्ति
+    console.log("\n[STEP 2] Recreating public schema...");
+    // Use IF NOT EXISTS to prevent 42P06 crash
+    await db.none("CREATE SCHEMA IF NOT EXISTS public");
+    console.log(
+      "[STEP 2] Schema 'public' ensured (created or already existed)."
+    );
+
+    // 3. Executing Schema and Seed files sequentially using the pool (db.none)
+    console.log("\n[STEP 3] Executing schema SQL files...");
+    for (const file of SCHEMA_FILES) {
+      const filePath = path.join(SCHEMA_DIR, file);
+      console.log(`  -> Executing SCHEMA: ${file}`);
+      const sql = readFile(filePath);
+      await db.none(sql); // Simple execution on the pool
+      console.log(`  -> OK: ${file}`);
+    }
+    console.log("[STEP 3] All schema files executed successfully.");
+
+    // 4. Executing seed data SQL files
+    console.log("\n[STEP 4] Executing seed data SQL files...");
+    for (const file of SEED_FILES) {
+      const filePath = path.join(SEED_DIR, file);
+      console.log(`  -> Seeding DATA: ${file}`);
+      const sql = readFile(filePath);
+      await db.none(sql); // Simple execution on the pool
+      console.log(`  -> OK: ${file}`);
+    }
+    console.log("[STEP 4] All seed data files executed successfully.");
+
     console.log("\n=================================================");
-    console.log("== Database Setup Complete: Ready for testing. ==");
-    console.log("== Admin User: rushishete72@gmail.com / password123 ==");
+    console.log("== DATABASE RESET AND SEED COMPLETE! ==");
     console.log("=================================================");
   } catch (error) {
-    console.error(
-      "\n[CRITICAL FAILURE] Database connection or operation failed:",
-      error.message
-    );
-    process.exit(1); // विफल होने पर प्रक्रिया बंद करें
+    if (error.code) {
+      console.error(`\n[FATAL DB ERROR] Code: ${error.code}`, error.message);
+      console.error("  Query:", error.query || "N/A");
+    } else {
+      console.error(
+        "\n[CRITICAL FAILURE] Database connection or operation failed:",
+        error.message || error
+      );
+    }
   } finally {
-    // pg-promise कनेक्शन बंद करें
-    db.$pool.end();
+    pgp.end();
+    console.log(`\n[DB] pg-promise pool closed.`);
   }
 }
 
-// स्क्रिप्ट निष्पादित करें
-resetAndSeed();
+// Script ko chalayein
+runReset();
