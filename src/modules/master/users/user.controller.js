@@ -1,4 +1,4 @@
-// File: src/modules/master/users/user.controller.js
+// File: src/modules/master/users/user.controller.js (FINAL AUDIT FIX)
 
 const asyncHandler = require("../../../utils/asyncHandler");
 const APIError = require("../../../utils/errorHandler");
@@ -25,12 +25,21 @@ const syncValidateSchema = (schema, data) => {
 };
 
 // =========================================================================
+// AUDIT HELPER: Get User ID from authenticated session
+// =========================================================================
+const getUserId = (req) => (req.user && req.user.user_id) ? req.user.user_id : null; 
+
+
+// =========================================================================
 // CONTROLLER FUNCTIONS
 // =========================================================================
 
 /** 1. POST /: Create New User (Permission: 'manage:users') */
 const createUser = asyncHandler(async (req, res) => {
   const data = syncValidateSchema(createUserSchema, req.body);
+  
+  data.created_by_user_id = getUserId(req); // ✅ AUDIT FIELD INJECTED
+
   const newUser = await userService.createUser(data);
 
   // Security: Response से password hash हटाएँ
@@ -66,7 +75,8 @@ const getUserById = asyncHandler(async (req, res) => {
       .status(404)
       .json({ message: `User with ID ${userId} not found.` });
   }
-  delete user.password_hash;
+  // Data retrieval now includes audit fields
+  delete user.password_hash; 
   res
     .status(200)
     .json({ message: "User details fetched successfully.", data: user });
@@ -77,17 +87,15 @@ const updateUser = asyncHandler(async (req, res) => {
   const userId = parseInt(req.params.userId);
   const data = syncValidateSchema(updateUserSchema, req.body);
 
+  data.updated_by_user_id = getUserId(req); // ✅ AUDIT FIELD INJECTED
+
   const updatedUser = await userService.updateUser(userId, data);
 
   if (!updatedUser) {
-    return res
-      .status(404)
-      .json({ message: `User with ID ${userId} not found.` });
+    return res.status(404).json({ message: `User with ID ${userId} not found.` });
   }
   delete updatedUser.password_hash;
-  res
-    .status(200)
-    .json({ message: "User updated successfully.", data: updatedUser });
+  res.status(200).json({ message: "User updated successfully.", data: updatedUser });
 });
 
 /** 5. PATCH /role/:userId: Change User Role (Permission: 'manage:users') */
@@ -95,82 +103,63 @@ const changeUserRole = asyncHandler(async (req, res) => {
   const userId = parseInt(req.params.userId);
   const { role_id } = syncValidateSchema(changeUserRoleSchema, req.body);
 
-  const updatedUser = await userService.changeUserRole(userId, role_id);
+  const updatedUser = await userService.changeUserRole(userId, role_id, getUserId(req)); // ✅ AUDIT FIELD PASSED
 
   if (!updatedUser) {
-    return res
-      .status(404)
-      .json({ message: `User ID ${userId} या Role ID ${role_id} नहीं मिला।` });
+    return res.status(404).json({ message: `User ID ${userId} या Role ID ${role_id} नहीं मिला।` });
   }
   delete updatedUser.password_hash;
-  res
-    .status(200)
-    .json({
+  res.status(200).json({
       message: `Role ID ${role_id} successfully assigned to User ID ${userId}.`,
       data: updatedUser,
-    });
+  });
 });
 
 /** 6. PATCH /password/:userId: Reset User Password (Permission: 'manage:users') */
 const resetUserPassword = asyncHandler(async (req, res) => {
   const userId = parseInt(req.params.userId);
-  const { new_password } = syncValidateSchema(
-    resetUserPasswordSchema,
-    req.body
-  );
+  const { new_password } = syncValidateSchema(resetUserPasswordSchema, req.body);
 
-  const updatedUser = await userService.resetUserPassword(userId, new_password);
+  const updatedUser = await userService.resetUserPassword(userId, new_password, getUserId(req)); // ✅ AUDIT FIELD PASSED
 
   if (!updatedUser) {
-    return res
-      .status(404)
-      .json({ message: `User with ID ${userId} not found.` });
+    return res.status(404).json({ message: `User with ID ${userId} not found.` });
   }
 
-  res
-    .status(200)
-    .json({
+  res.status(200).json({
       message: `Password successfully reset for User ID ${userId}.`,
       data: updatedUser,
-    });
+  });
 });
 
 /** 7. PATCH /deactivate/:userId: Deactivate User (Permission: 'manage:users') */
 const deactivateUser = asyncHandler(async (req, res) => {
   const userId = parseInt(req.params.userId);
-  const updatedUser = await userService.deactivateUser(userId);
+  const updatedUser = await userService.deactivateUser(userId, getUserId(req)); // ✅ AUDIT FIELD PASSED
 
   if (!updatedUser) {
-    return res
-      .status(404)
-      .json({ message: `User with ID ${userId} not found.` });
+    return res.status(404).json({ message: `User with ID ${userId} not found.` });
   }
   delete updatedUser.password_hash;
-  res
-    .status(200)
-    .json({
+  res.status(200).json({
       message: `User ID ${userId} deactivated successfully.`,
       data: updatedUser,
-    });
+  });
 });
 
 /** 8. PATCH /activate/:userId: Activate User (Permission: 'manage:users') */
 const activateUser = asyncHandler(async (req, res) => {
   const userId = parseInt(req.params.userId);
-  const updatedUser = await userService.activateUser(userId);
+  const updatedUser = await userService.activateUser(userId, getUserId(req)); // ✅ AUDIT FIELD PASSED
 
   if (!updatedUser) {
-    return res
-      .status(404)
-      .json({ message: `User with ID ${userId} not found.` });
+    return res.status(404).json({ message: `User with ID ${userId} not found.` });
   }
   delete updatedUser.password_hash;
-  res
-    .status(200)
-    .json({
+  res.status(200).json({
       message: `User ID ${userId} activated successfully.`,
       data: updatedUser,
-    });
+  });
 });
 
 module.exports = {

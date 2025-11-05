@@ -1,9 +1,8 @@
-// File: src/modules/master/users/user.model.js
+// File: src/modules/master/users/user.model.js (FINAL AUDIT FIX)
 
 // निर्भरताएँ
 const { db, pgp } = require("../../../../src/database/db");
 const APIError = require("../../../utils/errorHandler");
-// Password hashing के लिए bcrypt की आवश्यकता है (Service Layer में उपयोग होगा, लेकिन Model CRUD Functions पर ध्यान केंद्रित करता है)
 const TABLE_NAME = "master_users";
 
 // --- Helper Function ---
@@ -13,6 +12,7 @@ const getUserWithRole = async (userId) => {
         SELECT
             u.user_id, u.full_name, u.email, 
             u.is_active, u.is_verified, u.last_login,
+            u.created_at, u.created_by_user_id, u.updated_at, u.updated_by_user_id, -- ✅ AUDIT FIELDS ADDED
             r.role_id, r.role_name
         FROM master_users u
         LEFT JOIN master_roles r ON u.role_id = r.role_id
@@ -27,11 +27,11 @@ const getUserWithRole = async (userId) => {
 
 /** 1. एक नया उपयोगकर्ता (User) बनाता है। */
 const createUser = async (data) => {
-  const { full_name, email, password_hash, role_id } = data;
+  const { full_name, email, password_hash, role_id, created_by_user_id } = data; // ✅ created_by_user_id प्राप्त करें
 
   // सुनिश्चित करें कि केवल आवश्यक कॉलम डालें
   const columns = new pgp.helpers.ColumnSet(
-    ["full_name", "email", "password_hash", "role_id", "is_verified"],
+    ["full_name", "email", "password_hash", "role_id", "is_verified", "created_by_user_id"], // ✅ COLUMN SET UPDATED
     { table: TABLE_NAME }
   );
 
@@ -43,6 +43,7 @@ const createUser = async (data) => {
         password_hash: password_hash,
         role_id: role_id,
         is_verified: true, // Admin-created user को तुरंत सत्यापित (verified) माना जाता है।
+        created_by_user_id: created_by_user_id, // ✅ INSERT किया गया
       },
       columns,
       TABLE_NAME
@@ -72,6 +73,7 @@ const getAllUsers = async ({ limit, offset }) => {
   const dataQuery = `
         SELECT
             u.user_id, u.full_name, u.email, u.is_active, u.is_verified, 
+            u.created_by_user_id, u.updated_by_user_id, -- ✅ AUDIT FIELDS ADDED
             r.role_name
         FROM master_users u
         LEFT JOIN master_roles r ON u.role_id = r.role_id
@@ -103,19 +105,22 @@ const updateUser = async (userId, data) => {
   if (data.email) {
     data.email = data.email.toLowerCase().trim();
   }
+  // data में updated_at और updated_by_user_id Controller/Service द्वारा इंजेक्ट किए गए हैं
   data.updated_at = new Date();
 
-  // केवल allowed columns को पास करें
-  const allowedColumns = [
+  // updateData में केवल वे कुंजियाँ होनी चाहिए जिन्हें हम उपयोग करना चाहते हैं
+  const updateData = {};
+  const allowedKeys = [
     "full_name",
     "is_active",
     "is_verified",
     "password_hash",
     "role_id",
     "updated_at",
+    "updated_by_user_id" // ✅ AUDIT FIELD ADDED TO LOGIC
   ];
-  const updateData = {};
-  allowedColumns.forEach((col) => {
+  
+  allowedKeys.forEach((col) => {
     if (data[col] !== undefined) {
       updateData[col] = data[col];
     }
@@ -124,15 +129,13 @@ const updateUser = async (userId, data) => {
   // यदि updateData खाली है, तो रोल के साथ user लौटाएँ
   if (Object.keys(updateData).length === 0) return getUserWithRole(userId);
 
-  // 🚨 CRITICAL FIX: pgp.helpers.update को केवल अपडेट किए जा रहे फ़ील्ड की कुंजियाँ पास करें।
-  // Object.keys(updateData) अब केवल वे कुंजियाँ लौटाएगा जो 'data' में मौजूद थीं।
+  // ✅ CRITICAL FIX: pgp.helpers.update को केवल अपडेट किए जा रहे फ़ील्ड की कुंजियाँ पास करें।
   const updateQuery =
     pgp.helpers.update(updateData, Object.keys(updateData), TABLE_NAME) +
     ` WHERE user_id = ${userId} RETURNING user_id`;
 
-  // ... (rest of the try/catch block remains the same)
   try {
-    const result = await db.oneOrNone(updateQuery); // Call to line 128 was here
+    const result = await db.oneOrNone(updateQuery);
     if (!result) return null;
 
     return getUserWithRole(result.user_id);
@@ -149,6 +152,6 @@ module.exports = {
   createUser,
   getUserById,
   getAllUsers,
-  updateUser, // सभी PUT, PATCH, deactivate, activate के लिए आधार
+  updateUser, 
   getUserWithRole,
 };
