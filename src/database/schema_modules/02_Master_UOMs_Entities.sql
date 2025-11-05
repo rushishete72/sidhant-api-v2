@@ -1,12 +1,19 @@
 /* * Module: Master Data - UOMs, Suppliers, Clients (FINAL FIX: Added Inventory Master Tables) */
 
+/* * Module: Master Data - UOMs, Suppliers, Clients (FINAL FIX: Added Full User Auditing) */
+
 -- 1. Units of Measure (UOMs) Table
 CREATE TABLE IF NOT EXISTS master_uoms (
     uom_id SERIAL PRIMARY KEY,
     uom_code VARCHAR(10) UNIQUE NOT NULL,
     uom_name VARCHAR(50) NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    
+    -- ✅ FULL AUDIT FIELDS
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by_user_id INTEGER REFERENCES master_users(user_id),
+    updated_at TIMESTAMP WITH TIME ZONE,
+    updated_by_user_id INTEGER REFERENCES master_users(user_id)
 );
 
 -- 2. Suppliers Table
@@ -18,7 +25,12 @@ CREATE TABLE IF NOT EXISTS master_suppliers (
     phone VARCHAR(20),
     address_json JSONB,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    
+    -- ✅ FULL AUDIT FIELDS
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by_user_id INTEGER REFERENCES master_users(user_id),
+    updated_at TIMESTAMP WITH TIME ZONE,
+    updated_by_user_id INTEGER REFERENCES master_users(user_id)
 );
 
 -- 3. Clients Table
@@ -30,9 +42,13 @@ CREATE TABLE IF NOT EXISTS master_clients (
     phone VARCHAR(20),
     address_json JSONB,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    
+    -- ✅ FULL AUDIT FIELDS
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by_user_id INTEGER REFERENCES master_users(user_id),
+    updated_at TIMESTAMP WITH TIME ZONE,
+    updated_by_user_id INTEGER REFERENCES master_users(user_id)
 );
-
 -- ==========================================================
 -- ✅ CRITICAL FIX: Inventory Master Tables added here
 -- ये टेबल्स 08_Inventory_Receipts.sql और 09_Initial_Master_Data.sql के लिए आवश्यक हैं।

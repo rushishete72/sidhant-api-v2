@@ -1,4 +1,4 @@
-// File: src/modules/master/roles/role.service.js
+// File: src/modules/master/roles/role.service.js (No Logic Change Needed)
 
 const roleModel = require("./role.model");
 
@@ -43,6 +43,10 @@ const createPermission = async (data) => {
   return roleModel.createPermission(data);
 };
 
+/** 8. ✅ NEW FUNCTION: अनुमति का विवरण/कुंजी अपडेट करता है। (CRITICAL FIX) */
+const updatePermission = async (oldPermissionKey, data) => {
+    return roleModel.updatePermission(oldPermissionKey, data); // Model से कॉल करें
+};
 module.exports = {
   getAllRoles,
   getRoleById,
@@ -51,4 +55,5 @@ module.exports = {
   getAllPermissions,
   updateRolePermissions,
   createPermission,
+  updatePermission,
 };

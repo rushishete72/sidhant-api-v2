@@ -44,6 +44,14 @@ router
     roleController.createPermission
   ); // ✅ NEW ROUTE
 
+// ✅ NEW ROUTE: PUT /permissions/:permissionKey (Update Key/Description)
+router.put(
+  "/permissions/:permissionKey", 
+  authorize(["manage:permissions", "admin"]),
+  roleController.updatePermission
+);
+
+
 // 6. PATCH Assign/Revoke Permissions for a Role
 router.patch(
   "/permissions/:roleId",

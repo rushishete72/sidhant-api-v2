@@ -66,9 +66,31 @@ const createPermissionSchema = Joi.object({
     .label("Description"),
 });
 
+/**
+ * 5. PUT /permissions/:permissionKey (Update Permission Key and Description) के लिए Body Validation
+ */
+const updatePermissionSchema = Joi.object({
+    // ✅ FIX: permission_key को Optional जोड़ा गया ताकि renaming की अनुमति हो।
+    permission_key: Joi.string()
+        .min(3)
+        .max(100)
+        .pattern(/^[a-zA-Z0-9:_-]+$/) // Uppercase, hyphen, underscore की अनुमति के लिए पैटर्न अद्यतन
+        .optional()
+        .label('Permission Key'),
+        
+    description: Joi.string()
+        .max(255)
+        .optional() // Description अब वैकल्पिक है
+        .allow(null, '')
+        .label('Description'),
+})
+.min(1) // सुनिश्चित करें कि कम से कम एक फ़ील्ड (key या description) अपडेट के लिए मौजूद हो
+.label('Update Permission Data');
+
 module.exports = {
   createRoleSchema,
   updateRoleSchema,
   updateRolePermissionsSchema,
   createPermissionSchema,
+  updatePermissionSchema,
 };

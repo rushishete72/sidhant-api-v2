@@ -1,13 +1,11 @@
-// File: src/modules/master/roles/role.model.js (FIXED & UP-TO-DATE)
+// File: src/modules/master/roles/role.model.js (FINAL AUDIT FIX)
 /*
  * Context Note: यह 'master_roles' और 'permissions' टेबल के लिए डेटाबेस तर्क (logic) को संभालता है।
  */
 
 // निर्भरताएँ (Dependencies)
 const { db, pgp } = require("../../../../src/database/db");
-// ✅ FIXED: CustomError क्लास को APIError के रूप में आयात किया गया।
 const APIError = require("../../../utils/errorHandler");
-// ✅ FIXED: टेबल का नाम 'master_roles' का उपयोग किया गया है।
 const TABLE_NAME = "master_roles";
 const PERMISSIONS_TABLE = "permissions";
 // --- Helper Functions ---
@@ -17,12 +15,13 @@ const getRoleWithPermissions = async (roleId) => {
   const query = `
         SELECT
             r.role_id, r.role_name, r.created_at, r.updated_at,
+            r.created_by_user_id, r.updated_by_user_id, -- ✅ AUDIT FIELDS ADDED
             COALESCE(ARRAY_AGG(p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), '{}') AS permissions
         FROM master_roles r  
         LEFT JOIN role_permissions rp ON r.role_id = rp.role_id
         LEFT JOIN permissions p ON rp.permission_id = p.permission_id
         WHERE r.role_id = $1
-        GROUP BY r.role_id, r.role_name, r.created_at, r.updated_at;
+        GROUP BY r.role_id, r.role_name, r.created_at, r.updated_at, r.created_by_user_id, r.updated_by_user_id; -- Group By Updated
     `;
   return db.oneOrNone(query, [roleId]);
 };
@@ -39,14 +38,14 @@ const getAllRoles = async ({ limit, offset }) => {
         FROM master_roles r  
         LEFT JOIN role_permissions rp ON r.role_id = rp.role_id
         LEFT JOIN permissions p ON rp.permission_id = p.permission_id
-        GROUP BY r.role_id, r.role_name, r.created_at, r.updated_at
+        GROUP BY r.role_id, r.role_name, r.created_at, r.updated_at, r.created_by_user_id, r.updated_by_user_id
         ORDER BY r.role_name ASC
         LIMIT $<limit> OFFSET $<offset>
     `;
 
   const dataQuery = `
         SELECT
-            r.role_id, r.role_name, r.created_at,
+            r.role_id, r.role_name, r.created_at, r.updated_at, r.created_by_user_id, -- ✅ SELECT LIST UPDATED
             COALESCE(ARRAY_AGG(p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), '{}') AS permissions
         ${baseQuery}
     `;
@@ -70,13 +69,13 @@ const getRoleById = async (roleId) => {
 
 /** 3. एक नई भूमिका (Role) बनाता है। */
 const createRole = async (data) => {
-  const { role_name } = data;
-  const columns = new pgp.helpers.ColumnSet(["role_name"], {
+  const { role_name, created_by_user_id } = data; // ✅ GET created_by_user_id
+  const columns = new pgp.helpers.ColumnSet(["role_name", "created_by_user_id"], { // ✅ COLUMN SET UPDATED
     table: TABLE_NAME,
   });
 
   const insertQuery =
-    pgp.helpers.insert({ role_name: role_name.trim() }, columns, TABLE_NAME) +
+    pgp.helpers.insert({ role_name: role_name.trim(), created_by_user_id: created_by_user_id }, columns, TABLE_NAME) + // ✅ PASS created_by_user_id
     " RETURNING role_id, role_name;";
 
   try {
@@ -100,10 +99,12 @@ const updateRole = async (roleId, data) => {
   if (data.role_name) {
     data.role_name = data.role_name.trim();
   }
-  data.updated_at = new Date();
+  // data now contains updated_by_user_id injected by controller/service
+  data.updated_at = new Date(); 
 
+  // ✅ CRITICAL FIX: updated_by_user_id को शामिल करने के लिए Object.keys(data) का उपयोग करें
   const updateQuery =
-    pgp.helpers.update(data, ["role_name", "updated_at"], TABLE_NAME) +
+    pgp.helpers.update(data, Object.keys(data), TABLE_NAME) + 
     ` WHERE role_id = ${roleId} RETURNING role_id`;
 
   try {
@@ -129,16 +130,16 @@ const updateRole = async (roleId, data) => {
 
 /** 5. सभी उपलब्ध अनुमतियों (Permissions) को प्राप्त करता है। */
 const getAllPermissions = async () => {
-  // यह मानकर चलते हैं कि 'permissions' टेबल बन चुकी है।
+  // ✅ AUDIT FIELDS ADDED
   const query =
-    "SELECT permission_id, permission_key, description FROM permissions ORDER BY permission_key ASC";
+    "SELECT permission_id, permission_key, description, created_at, created_by_user_id, updated_at, updated_by_user_id FROM permissions ORDER BY permission_key ASC";
   return db.any(query);
 };
 
 //** 5.2. ✅ NEW FUNCTION: एक नई अनुमति (Permission) बनाता है।
 const createPermission = async (data) => {
-  const { permission_key, description } = data;
-  const columns = new pgp.helpers.ColumnSet(["permission_key", "description"], {
+  const { permission_key, description, created_by_user_id } = data; // ✅ GET created_by_user_id
+  const columns = new pgp.helpers.ColumnSet(["permission_key", "description", "created_by_user_id"], { // ✅ COLUMN SET UPDATED
     table: PERMISSIONS_TABLE,
   });
 
@@ -147,13 +148,13 @@ const createPermission = async (data) => {
       {
         permission_key: permission_key.toLowerCase().trim(),
         description,
+        created_by_user_id: created_by_user_id, // ✅ PASS created_by_user_id
       },
       columns,
       PERMISSIONS_TABLE
     ) + " RETURNING permission_id, permission_key, description;";
 
   try {
-    // अनुमति बनाते समय कोई ट्रांजेक्शन (db.tx) आवश्यक नहीं है
     const result = await db.one(insertQuery);
     return result;
   } catch (error) {
@@ -170,6 +171,7 @@ const createPermission = async (data) => {
 
 /** 6. भूमिका के लिए अनुमतियों को असाइन/रद्द (Assign/Revoke) करता है। (ट्रांजैक्शन में) */
 const updateRolePermissions = async (roleId, permissionKeys) => {
+// ... (Logic remains the same as it does not rely on direct audit fields for junction table)
   if (isNaN(Number(roleId)) || Number(roleId) <= 0) {
     return null;
   }
@@ -233,6 +235,40 @@ const updateRolePermissions = async (roleId, permissionKeys) => {
   });
 };
 
+
+/** 7. ✅ FINAL FIX: अनुमति (Permission) का विवरण और कुंजी (Key) अपडेट करता है। */
+const updatePermission = async (oldPermissionKey, data) => {
+    
+    if (data.permission_key) {
+        // सुनिश्चित करें कि नई कुंजी trim और lowercase हो (Consistency Mandate)
+        data.permission_key = data.permission_key.toLowerCase().trim(); 
+    }
+    
+    // updated_at और updated_by_user_id Controller द्वारा Inject किए जाते हैं।
+    data.updated_at = new Date(); 
+    
+    // CRITICAL: यहाँ हम 'oldPermissionKey' (URL से) का उपयोग WHERE clause के लिए करेंगे।
+    const updateQuery =
+        pgp.helpers.update(data, Object.keys(data), PERMISSIONS_TABLE) +
+        ` WHERE permission_key = '${oldPermissionKey}' RETURNING permission_key, description;`;
+
+    try {
+        const result = await db.oneOrNone(updateQuery);
+        if (!result) return null;
+
+        return result;
+    } catch (error) {
+        if (error.code === '23505') {
+            // यदि उपयोगकर्ता एक ऐसा नया permission_key दर्ज करता है जो पहले से मौजूद है।
+            throw new APIError(`अपडेट विफल: यह अनुमति कुंजी ('${data.permission_key}') पहले से मौजूद है।`, 409);
+        }
+        console.error("DB Error in updatePermission:", error);
+        throw new APIError("Permission update failed.", 500);
+    }
+};
+
+
+
 // =========================================================================
 // FINAL EXPORTS
 // =========================================================================
@@ -245,4 +281,5 @@ module.exports = {
   getAllPermissions,
   updateRolePermissions,
   createPermission,
+  updatePermission,
 };

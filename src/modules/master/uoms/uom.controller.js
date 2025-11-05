@@ -1,182 +1,116 @@
-/*
- * Context Note: यह 'master_uoms' (Unit of Measurement) के लिए HTTP अनुरोधों को संभालता है।
- * यह model को business logic से जोड़ता है।
- * (पुराने /src/modules/masterData/uom/uom.controller.js से लिया गया)
- */
+// File: src/modules/master/uoms/uom.controller.js (FINAL FIX: Audit Field Injection)
 
-// निर्भरताएँ (Dependencies)
-const uomModel = require('./uom.model'); // (इसे हम अगले चरण में बनाएँगे)
-const { APIError } = require('../../../utils/errorHandler'); 
-// validateUomCreation, validateUomUpdate, tr को validation.js से इम्पोर्ट करें
-const { validateUomCreation, validateUomUpdate, tr } = require('../../../utils/validation'); 
+const asyncHandler = require("../../../utils/asyncHandler");
+const APIError = require("../../../utils/errorHandler");
+const uomService = require("./uom.service");
+const { createUOMSchema, updateUOMSchema } = require("./uom.validation");
 
-// --- Core Helper Functions ---
-
-/** URL से प्राप्त ID को मान्य (Validate) करता है। */
-const handleIdValidation = (id, paramName = 'ID') => {
-    const parsedId = parseInt(id, 10);
-    if (isNaN(parsedId) || parsedId <= 0) {
-        return { error: `अमान्य (Invalid) ${paramName} URL में प्रदान किया गया है।` };
-    }
-    return { id: parsedId };
+// [NOTE]: syncValidateSchema helper
+const syncValidateSchema = (schema, data) => {
+  if (!schema || typeof schema.validate !== "function") {
+    throw new APIError("Internal Validation Schema Missing.", 500);
+  }
+  const options = { abortEarly: false, allowUnknown: true, stripUnknown: true };
+  const { error, value } = schema.validate(data, options);
+  if (error) {
+    const errors = error.details.map((detail) => detail.message);
+    throw new APIError("Validation Failed", 400, errors);
+  }
+  return value;
 };
 
 // =========================================================================
-// A. CORE CRUD & STATUS MANAGEMENT CONTROLLERS
+// CONTROLLER FUNCTIONS
 // =========================================================================
 
-/** 1. नया UOM बनाता है। */
-const createUom = async (req, res, next) => {
-    // 1. उपयोगकर्ता को JWT (req.user) से प्राप्त करें
-    const creatorId = req.user.user_id; 
-    
-    const uomData = { 
-        ...req.body,
-        created_by: creatorId // created_by को auth टोकन से जोड़ें
-    };
+/** 1. GET /: Get All UOMs (Permission: 'read:master') */
+const getAllUOMs = asyncHandler(async (req, res) => {
+  const { limit = 10, page = 1 } = req.query;
+  const result = await uomService.getAllUOMs({
+    limit: parseInt(limit),
+    page: parseInt(page),
+  });
+  res.status(200).json({
+    message: "UOMs fetched successfully.",
+    data: result.data,
+    total_count: result.total_count,
+  });
+});
 
-    // 2. वैलिडेशन
-    const validationError = validateUomCreation(uomData); 
-    if (validationError) {
-        return next(new APIError(validationError, 400));
-    }
+/** 2. GET /:uomId: Get UOM by ID (Permission: 'read:master') */
+const getUOMById = asyncHandler(async (req, res) => {
+  const uomId = parseInt(req.params.uomId);
+ 
+  
+  if (isNaN(uomId) || uomId <= 0) {
+    return res.status(400).json({ message: "Invalid UOM ID provided." });
+  }
 
-    // 3. मॉडल को कॉल करें
-    try {
-        const newUom = await uomModel.createUom(uomData);
+  const uom = await uomService.getUOMById(uomId);
+  if (!uom) {
+    return res.status(404).json({ message: `UOM with ID ${uomId} not found.` });
+  }
+  res.status(200).json({
+    message: "UOM details fetched successfully.",
+    data: uom,
+  });
+});
 
-        return res.status(201).json({ 
-            message: `UOM '${newUom.uom_code}' सफलतापूर्वक बन गया।`, 
-            data: newUom 
-        });
-    } catch (error) {
-        if (error.code === '23505') { // Unique constraint violation (uom_code)
-            error.status = 409; 
-            error.message = 'UOM कोड (Code) या नाम (Name) पहले से मौजूद है।';
-        }
-        return next(error); 
-    }
-};
+/** 3. POST /: Create New UOM (Permission: 'manage:master') */
+const createUOM = asyncHandler(async (req, res) => {
+  // 1. Validation
+  const data = syncValidateSchema(createUOMSchema, req.body);
 
-/** 2. ID द्वारा UOM को प्राप्त करता है। */
-const getUomById = async (req, res, next) => {
-    const { error, id: uomId } = handleIdValidation(req.params.uomId, 'UOM ID');
-    if (error) return next(new APIError(error, 400)); 
+  // ✅ CRITICAL AUDIT FIX: Created By User ID Inject करें
+  if (req.user && req.user.user_id) {
+    data.created_by_user_id = req.user.user_id;
+  }
 
-    try {
-        const uom = await uomModel.getUomById(uomId);
-        
-        if (!uom) return next(new APIError(`UOM ID ${uomId} नहीं मिला।`, 404)); 
-        return res.status(200).json({ data: uom });
-    } catch (error) {
-        return next(error); 
-    }
-};
+  // 2. Service Call
+  const newUOM = await uomService.createUOM(data);
 
-/** 3. सभी UOMs को प्राप्त करता है (Paginated)। */
-const getAllUoms = async (req, res, next) => {
-    try {
-        const page = parseInt(req.query.page, 10) || 1;
-        const limit = parseInt(req.query.limit, 10) || 25;
-        const search = tr(req.query.search);
-        const isActive = req.query.isActive === 'false' ? false : (req.query.isActive === 'true' ? true : null);
-        const offset = (page - 1) * limit;
-        
-        const { data: uoms, total_count } = await uomModel.getAllUoms({
-            limit, offset, search, isActive,
-        });
+  // 3. Response
+  res.status(201).json({
+    message: `UOM '${newUOM.uom_code}' created successfully.`,
+    data: newUOM,
+  });
+});
 
-        const totalPages = Math.ceil(total_count / limit);
+/** 4. PUT /:uomId: Update UOM (Permission: 'manage:master') */
+const updateUOM = asyncHandler(async (req, res) => {
+  const uomId = parseInt(req.params.uomId);
+  if (isNaN(uomId) || uomId <= 0) {
+    return res.status(400).json({ message: "Invalid UOM ID provided." });
+  }
 
-        return res.status(200).json({ 
-            message: 'Master UOMs retrieved successfully.', 
-            pagination: {
-                total_records: total_count, total_pages: totalPages,
-                current_page: page, limit: limit,
-            },
-            data: uoms 
-        });
-    } catch (error) {
-        return next(error); 
-    }
-};
+  // 1. Validation
+  const data = syncValidateSchema(updateUOMSchema, req.body);
 
-/** 4. UOM डेटा को अपडेट करता है। */
-const updateUom = async (req, res, next) => {
-    const { error, id: uomId } = handleIdValidation(req.params.uomId, 'UOM ID');
-    if (error) return next(new APIError(error, 400)); 
+  // ✅ CRITICAL AUDIT FIX: Updated By User ID Inject करें
+  if (req.user && req.user.user_id) {
+    data.updated_by_user_id = req.user.user_id;
+  }
 
-    const updateData = req.body;
-    
-    const validationError = validateUomUpdate(updateData); 
-    if (validationError) return next(new APIError(validationError, 400)); 
+  // 2. Service Call
+  const updatedUOM = await uomService.updateUOM(uomId, data);
 
-    try {
-        const updatedUom = await uomModel.updateUom(uomId, updateData);
-
-        if (!updatedUom) return next(new APIError(`UOM ID ${uomId} नहीं मिला।`, 404)); 
-        return res.status(200).json({ 
-            message: `UOM '${updatedUom.uom_code}' सफलतापूर्वक अपडेट हुआ।`, 
-            data: updatedUom 
-        });
-    } catch (error) {
-        if (error.code === '23505') {
-            error.status = 409; 
-            error.message = 'अपडेट विफल: UOM कोड (Code) या नाम (Name) पहले से मौजूद है।';
-        }
-        return next(error); 
-    }
-};
-
-/** 5. UOM को निष्क्रिय (Deactivate) करता है। */
-const deactivateUom = async (req, res, next) => {
-    const { error, id: uomId } = handleIdValidation(req.params.uomId, 'UOM ID');
-    if (error) return next(new APIError(error, 400)); 
-    
-    try {
-        const deactivated = await uomModel.deactivateUom(uomId);
-        
-        if (!deactivated) {
-            return next(new APIError(`UOM ID ${uomId} नहीं मिला या पहले से ही निष्क्रिय है।`, 400)); 
-        }
-        return res.status(200).json({
-            message: `UOM (ID: ${uomId}) सफलतापूर्वक निष्क्रिय किया गया।`,
-            data: deactivated,
-        });
-    } catch (error) {
-        return next(error);
-    }
-};
-
-/** 6. UOM को पुनः सक्रिय (Activate) करता है। */
-const activateUom = async (req, res, next) => {
-    const { error, id: uomId } = handleIdValidation(req.params.uomId, 'UOM ID');
-    if (error) return next(new APIError(error, 400)); 
-    
-    try {
-        const activated = await uomModel.activateUom(uomId);
-        
-        if (!activated) {
-            return next(new APIError(`UOM ID ${uomId} नहीं मिला या पहले से ही सक्रिय है।`, 400)); 
-        }
-        return res.status(200).json({
-            message: `UOM (ID: ${uomId}) सफलतापूर्वक सक्रिय किया गया।`,
-            data: activated,
-        });
-    } catch (error) {
-        return next(error);
-    }
-};
-
-// =========================================================================
-// FINAL EXPORTS
-// =========================================================================
+  // 3. Response
+  if (!updatedUOM) {
+    return res
+      .status(404)
+      .json({
+        message: `UOM with ID ${uomId} not found or no change applied.`,
+      });
+  }
+  res.status(200).json({
+    message: "UOM updated successfully.",
+    data: updatedUOM,
+  });
+});
 
 module.exports = {
-    createUom,
-    getUomById,
-    getAllUoms,
-    updateUom,
-    deactivateUom,
-    activateUom,
+  getAllUOMs,
+  getUOMById,
+  createUOM,
+  updateUOM,
 };

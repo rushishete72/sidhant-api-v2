@@ -1,4 +1,4 @@
-// File: src/modules/master/roles/role.controller.js
+// File: src/modules/master/roles/role.controller.js (FINAL AUDIT FIX)
 
 const asyncHandler = require("../../../utils/asyncHandler");
 const APIError = require("../../../utils/errorHandler"); // CustomError क्लास
@@ -8,6 +8,7 @@ const {
   updateRoleSchema,
   updateRolePermissionsSchema,
   createPermissionSchema,
+  updatePermissionSchema,
 } = require("./role.validation");
 
 // =========================================================================
@@ -58,6 +59,11 @@ const createRole = asyncHandler(async (req, res) => {
   // 1. Validation
   const data = syncValidateSchema(createRoleSchema, req.body);
 
+  // ✅ CRITICAL AUDIT FIX: Created By User ID Inject करें
+  if (req.user && req.user.user_id) {
+    data.created_by_user_id = req.user.user_id;
+  }
+
   // 2. Service Call
   const newRole = await roleService.createRole(data);
 
@@ -96,6 +102,11 @@ const updateRole = asyncHandler(async (req, res) => {
 
   // 1. Validation
   const data = syncValidateSchema(updateRoleSchema, req.body);
+
+  // ✅ CRITICAL AUDIT FIX: Updated By User ID Inject करें
+  if (req.user && req.user.user_id) {
+    data.updated_by_user_id = req.user.user_id;
+  }
 
   // 2. Service Call
   const updatedRole = await roleService.updateRole(roleId, data);
@@ -158,6 +169,11 @@ const createPermission = asyncHandler(async (req, res) => {
   // 1. Validation
   const data = syncValidateSchema(createPermissionSchema, req.body);
 
+  // ✅ CRITICAL AUDIT FIX: Created By User ID Inject करें
+  if (req.user && req.user.user_id) {
+    data.created_by_user_id = req.user.user_id;
+  }
+
   // 2. Service Call
   const newPermission = await roleService.createPermission(data);
 
@@ -165,6 +181,39 @@ const createPermission = asyncHandler(async (req, res) => {
   res.status(201).json({
     message: `Permission '${newPermission.permission_key}' created successfully.`,
     data: newPermission,
+  });
+});
+
+
+/** 8. ✅ FINAL FIX: PUT /permissions/:permissionKey: अनुमति का विवरण/कुंजी अपडेट करें। */
+const updatePermission = asyncHandler(async (req, res) => {
+  const oldPermissionKey = req.params.permissionKey;
+
+  // 1. Validation (Key और Description दोनों के लिए)
+  const data = syncValidateSchema(updatePermissionSchema, req.body);
+  
+  if (Object.keys(data).length === 0) {
+      return res.status(400).json({ message: "अपडेट के लिए कम से कम एक फ़ील्ड (Permission Key या Description) प्रदान करें।" });
+  }
+
+  // 2. CRITICAL AUDIT: Updated By User ID Inject करें
+  if (req.user && req.user.user_id) {
+    data.updated_by_user_id = req.user.user_id;
+  }
+
+  // 3. Service Call (oldPermissionKey का उपयोग WHERE condition के लिए किया जाता है)
+  const updatedPermission = await roleService.updatePermission(oldPermissionKey, data);
+
+  // 4. Response
+  if (!updatedPermission) {
+    return res.status(404).json({
+      message: `Permission Key '${oldPermissionKey}' नहीं मिली या कोई अपडेट लागू नहीं हुआ।`,
+    });
+  }
+
+  res.status(200).json({
+    message: `Permission Key '${updatedPermission.permission_key}' सफलतापूर्वक अपडेट किया गया।`,
+    data: updatedPermission,
   });
 });
 
@@ -176,4 +225,5 @@ module.exports = {
   getAllPermissions,
   updateRolePermissions,
   createPermission,
+  updatePermission,
 };
