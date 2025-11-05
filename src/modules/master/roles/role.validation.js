@@ -45,8 +45,30 @@ const updateRolePermissionsSchema = Joi.object({
     .label("Permission Keys Array"),
 });
 
+/**
+ * 4. POST /permissions (Create New Permission) के लिए Body Validation
+ */
+const createPermissionSchema = Joi.object({
+  permission_key: Joi.string()
+    .min(3)
+    .max(100)
+    .pattern(/^[a-zA-Z0-9:_\\-]+$/) // e.g., read:inventory, manage:users
+    .required()
+    .label("Permission Key")
+    .messages({
+      "string.pattern.base":
+        "Permission Key में केवल छोटे अक्षर, संख्याएँ, और कोलन (:) की अनुमति है। (e.g., read:module)",
+    }),
+  description: Joi.string()
+    .max(255)
+    .optional()
+    .allow(null, "")
+    .label("Description"),
+});
+
 module.exports = {
   createRoleSchema,
   updateRoleSchema,
   updateRolePermissionsSchema,
+  createPermissionSchema,
 };

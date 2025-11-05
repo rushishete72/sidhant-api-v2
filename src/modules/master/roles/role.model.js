@@ -9,7 +9,7 @@ const { db, pgp } = require("../../../../src/database/db");
 const APIError = require("../../../utils/errorHandler");
 // ✅ FIXED: टेबल का नाम 'master_roles' का उपयोग किया गया है।
 const TABLE_NAME = "master_roles";
-
+const PERMISSIONS_TABLE = "permissions";
 // --- Helper Functions ---
 
 /** भूमिका (Role) और उसकी अनुमतियों (Permissions) को एक साथ प्राप्त करता है। */
@@ -135,6 +135,39 @@ const getAllPermissions = async () => {
   return db.any(query);
 };
 
+//** 5.2. ✅ NEW FUNCTION: एक नई अनुमति (Permission) बनाता है।
+const createPermission = async (data) => {
+  const { permission_key, description } = data;
+  const columns = new pgp.helpers.ColumnSet(["permission_key", "description"], {
+    table: PERMISSIONS_TABLE,
+  });
+
+  const insertQuery =
+    pgp.helpers.insert(
+      {
+        permission_key: permission_key.toLowerCase().trim(),
+        description,
+      },
+      columns,
+      PERMISSIONS_TABLE
+    ) + " RETURNING permission_id, permission_key, description;";
+
+  try {
+    // अनुमति बनाते समय कोई ट्रांजेक्शन (db.tx) आवश्यक नहीं है
+    const result = await db.one(insertQuery);
+    return result;
+  } catch (error) {
+    if (error.code === "23505") {
+      throw new APIError(
+        `यह अनुमति कुंजी ('${permission_key}') पहले से मौजूद है।`,
+        409
+      );
+    }
+    console.error("Database Error in createPermission:", error);
+    throw new APIError("Permission insertion failed.", 500);
+  }
+};
+
 /** 6. भूमिका के लिए अनुमतियों को असाइन/रद्द (Assign/Revoke) करता है। (ट्रांजैक्शन में) */
 const updateRolePermissions = async (roleId, permissionKeys) => {
   if (isNaN(Number(roleId)) || Number(roleId) <= 0) {
@@ -211,4 +244,5 @@ module.exports = {
   updateRole,
   getAllPermissions,
   updateRolePermissions,
+  createPermission,
 };

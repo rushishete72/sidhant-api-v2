@@ -12,7 +12,7 @@ const emailSender = require("../../../utils/emailSender");
 const DEFAULT_USER_ROLE_ID = 2; // 'Standard User'
 const JWT_SECRET =
   process.env.JWT_SECRET || "your_secret_key_change_in_production";
-const JWT_EXPIRES_IN = "15m"; // ✅ ACCESS TOKEN: SHORT LIVED (15 minutes)
+const JWT_EXPIRES_IN = "65m"; // ✅ ACCESS TOKEN: SHORT LIVED (15 minutes)
 const REFRESH_JWT_SECRET =
   process.env.REFRESH_JWT_SECRET || "refresh_secret_change_me_in_env";
 const REFRESH_TOKEN_EXPIRES_IN = "7d"; // ✅ REFRESH TOKEN: LONG LIVED (7 days)

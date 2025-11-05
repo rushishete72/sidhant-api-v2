@@ -7,6 +7,7 @@ const {
   createRoleSchema,
   updateRoleSchema,
   updateRolePermissionsSchema,
+  createPermissionSchema,
 } = require("./role.validation");
 
 // =========================================================================
@@ -152,6 +153,21 @@ const updateRolePermissions = asyncHandler(async (req, res) => {
   });
 });
 
+/** 7. POST /permissions: Create New Permission (Permission: 'manage:permissions') */
+const createPermission = asyncHandler(async (req, res) => {
+  // 1. Validation
+  const data = syncValidateSchema(createPermissionSchema, req.body);
+
+  // 2. Service Call
+  const newPermission = await roleService.createPermission(data);
+
+  // 3. Response
+  res.status(201).json({
+    message: `Permission '${newPermission.permission_key}' created successfully.`,
+    data: newPermission,
+  });
+});
+
 module.exports = {
   getAllRoles,
   getRoleById,
@@ -159,4 +175,5 @@ module.exports = {
   updateRole,
   getAllPermissions,
   updateRolePermissions,
+  createPermission,
 };

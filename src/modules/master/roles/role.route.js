@@ -16,12 +16,7 @@ const roleController = require("./role.controller");
 // इस मॉड्यूल के सभी रूट्स के लिए प्रमाणीकरण (Authentication) की आवश्यकता है।
 router.use(authenticate);
 
-// 1. GET All Roles and their Permissions (Detailed List)
-// (अनुमति: 'read:roles' की आवश्यकता है)
 router.get("/", authorize(["read:roles", "admin"]), roleController.getAllRoles);
-
-// 2. POST Create New Role
-// (अनुमति: 'manage:roles' की आवश्यकता है)
 router.post(
   "/",
   authorize(["manage:roles", "admin"]),
@@ -29,15 +24,7 @@ router.post(
 );
 
 // 3. GET Role by ID (Detailed View)
-// (अनुमति: 'read:roles' की आवश्यकता है)
-router.get(
-  "/:roleId",
-  authorize(["read:roles", "admin"]),
-  roleController.getRoleById
-);
-
 // 4. PUT Update Role Name/Description
-// (अनुमति: 'manage:roles' की आवश्यकता है)
 router.put(
   "/:roleId",
   authorize(["manage:roles", "admin"]),
@@ -45,15 +32,19 @@ router.put(
 );
 
 // 5. GET All Available Permissions (List for UI)
-// (अनुमति: 'read:permissions' की आवश्यकता है)
-router.get(
-  "/permissions/all",
-  authorize(["read:permissions", "admin"]),
-  roleController.getAllPermissions
-);
+// ✅ 7. POST Create New Permission
+router
+  .route("/permissions") // New route definition
+  .get(
+    authorize(["read:permissions", "admin"]),
+    roleController.getAllPermissions
+  )
+  .post(
+    authorize(["manage:permissions", "admin"]),
+    roleController.createPermission
+  ); // ✅ NEW ROUTE
 
 // 6. PATCH Assign/Revoke Permissions for a Role
-// (अनुमति: 'manage:roles' की आवश्यकता है)
 router.patch(
   "/permissions/:roleId",
   authorize(["manage:roles", "admin"]),

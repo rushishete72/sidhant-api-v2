@@ -38,6 +38,11 @@ const updateRolePermissions = async (roleId, permissionKeys) => {
   return roleModel.updateRolePermissions(roleId, permissionKeys);
 };
 
+//** 7. ✅ NEW FUNCTION: एक नई अनुमति (Permission) बनाता है।
+const createPermission = async (data) => {
+  return roleModel.createPermission(data);
+};
+
 module.exports = {
   getAllRoles,
   getRoleById,
@@ -45,4 +50,5 @@ module.exports = {
   updateRole,
   getAllPermissions,
   updateRolePermissions,
+  createPermission,
 };

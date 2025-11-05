@@ -124,12 +124,15 @@ const updateUser = async (userId, data) => {
   // यदि updateData खाली है, तो रोल के साथ user लौटाएँ
   if (Object.keys(updateData).length === 0) return getUserWithRole(userId);
 
+  // 🚨 CRITICAL FIX: pgp.helpers.update को केवल अपडेट किए जा रहे फ़ील्ड की कुंजियाँ पास करें।
+  // Object.keys(updateData) अब केवल वे कुंजियाँ लौटाएगा जो 'data' में मौजूद थीं।
   const updateQuery =
-    pgp.helpers.update(updateData, allowedColumns, TABLE_NAME) +
+    pgp.helpers.update(updateData, Object.keys(updateData), TABLE_NAME) +
     ` WHERE user_id = ${userId} RETURNING user_id`;
 
+  // ... (rest of the try/catch block remains the same)
   try {
-    const result = await db.oneOrNone(updateQuery);
+    const result = await db.oneOrNone(updateQuery); // Call to line 128 was here
     if (!result) return null;
 
     return getUserWithRole(result.user_id);
